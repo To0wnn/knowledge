@@ -773,7 +773,8 @@ def machines_contract(tmp, ck, fr, raw, er, et, heard):
                       "claude": {"yolo": False, "trusted": False, "limit": None, "accounts": [
                           {"id": "", "email": "me@example.org", "plan": "max_5x"}, {"id": "../x"}, "junk",
                           {"id": "werk", "kind": "evil", "login": "https://evil.example/oauth/authorize?x", "windows": [[40, "5h", 2e9], ["x"]]},
-                          {"id": "thuis", "kind": "login", "login": "https://claude.com/cai/oauth/authorize?code=true"}]}},
+                          {"id": "thuis", "kind": "login", "login": "https://claude.com/cai/oauth/authorize?code=true"},
+                          {"id": "tok", "kind": "token", "preview": "sk-ant-oat01-…1234", "at": 1700000000, "expires": 1731536000}]}},
            "workers": [{"id": "MC-1", "project": "garden", "agent": "codex", "status": "running", "started": time.time() - 240,
                         "branch": "task/MC-1", "yolo": True, "open": "tail -f x.log"}], "limitWait": ["MC-2"],
            "folders": {"linked": [{"path": "/home/x/garden", "project": "garden"}]}, "waiting": {"garden/MC-3": "Codex runs 2 worker(s) already"}}
@@ -785,8 +786,11 @@ def machines_contract(tmp, ck, fr, raw, er, et, heard):
     assert m["agents"]["claude"]["trusted"] is False and m["agents"]["claude"]["limit"] is None and m["agents"]["claude"]["windows"] == []
     assert cx["windows"] == [[91.5, "5h", 2e9], [20.0, "7d", None]], cx["windows"]  # malformed windows dropped
     accs = m["agents"]["claude"]["accounts"]
-    assert [(a["id"], a["kind"], a.get("login", "")) for a in accs] == [("", "", ""), ("werk", "", ""), ("thuis", "login", "https://claude.com/cai/oauth/authorize?code=true")], accs
+    assert [(a["id"], a["kind"], a.get("login", "")) for a in accs] == [("", "", ""), ("werk", "", ""), ("thuis", "login", "https://claude.com/cai/oauth/authorize?code=true"), ("tok", "token", "")], accs
     assert accs[0]["email"] == "me@example.org" and accs[1]["windows"] == [[40.0, "5h", 2e9]], accs
+    assert next((a for a in accs if a["id"] == "tok"), None)["preview"] == "sk-ant-oat01-…1234"
+    assert next((a for a in accs if a["id"] == "tok"), None)["at"] == 1700000000
+    assert next((a for a in accs if a["id"] == "tok"), None)["expires"] == 1731536000
     # CPU/GPU/RAM/VRAM over 24 h: numbers kept, junk and unknown metrics dropped, the series capped at 144 points
     stats = {"bucket": 600, "total": {"ram": 16000, "evil": 1}, "cpu": {"min": 1, "max": 90, "avg": 20.5, "now": 7, "series": [None, 5, "x", True] + [1] * 200, "hour": [3] * 99, "windows": {"1h": [1, 9, 4], "6h": [1, 2], "evil": [1, 2, 3]}},
              "gpu": {"now": "hot", "series": []}, "disk": {"now": 1, "series": [1]}}

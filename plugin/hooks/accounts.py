@@ -177,8 +177,42 @@ def command(*args) -> list:
     return cmd
 
 
+def parse_iso(ts) -> int:
+    try:
+        from datetime import datetime
+        return int(datetime.fromisoformat(str(ts).replace("Z", "+00:00")).timestamp())
+    except (ValueError, TypeError, OSError):
+        return 0
+
+
+def token_preview(val: str) -> str:
+    """A safe preview of a secret (the prefix and the last 4 characters, e.g. 'sk-ant-oat01-…7890'): never the secret itself."""
+    val = (val or "").strip()
+    if len(val) <= 12:
+        return ""
+    m = re.match(r"^(sk-ant-[a-z0-9]+-)", val)
+    pref = m.group(1) if m else val[:8]
+    return f"{pref}…{val[-4:]}"
+
+
+def file_time(p: Path) -> int:
+    try:
+        return int(p.stat().st_mtime)
+    except OSError:
+        return 0
+
+
+def secret_preview(d: Path, kind: str) -> str:
+    if kind not in SECRETS:
+        return ""
+    try:
+        return token_preview((d / SECRETS[kind][0]).read_text(encoding="utf-8").strip())
+    except OSError:
+        return ""
+
+
 def status(d: Path, fresh: bool = False) -> dict:
-    """{"email", "plan"} of the sign-in in folder d (`claude auth status`), kept for STATUS_TTL."""
+    """{"email", "plan", "expires"} of the sign-in in folder d (`claude auth status`), kept for STATUS_TTL."""
     at, got = _STATUS.get(str(d), (0, None))
     if got is not None and not fresh and time.time() - at < STATUS_TTL:
         return got
@@ -187,10 +221,21 @@ def status(d: Path, fresh: bool = False) -> dict:
         r = subprocess.run(command("auth", "status", "--json"), capture_output=True, text=True, timeout=30, encoding="utf-8",
                            env={**e, **({"CLAUDE_CONFIG_DIR": str(d)} if d != MAIN else {})})
         s = json.loads(r.stdout or "{}")
+        exp = parse_iso(s.get("loginExpiresAt")) if s.get("loginExpiresAt") else 0
         got = {"email": str(s.get("email") or "")[:120] if s.get("loggedIn") else "",
-               "plan": str(s.get("planTier") or s.get("subscriptionType") or "")[:40] if s.get("loggedIn") else ""}
+               "plan": str(s.get("planTier") or s.get("subscriptionType") or "")[:40] if s.get("loggedIn") else "",
+               "expires": exp}
     except (OSError, ValueError, subprocess.SubprocessError, RuntimeError, AttributeError):
-        got = got or {"email": "", "plan": ""}
+        got = got or {"email": "", "plan": "", "expires": 0}
+    if not got.get("expires"):
+        try:
+            creds = json.loads((d / ".credentials.json").read_text(encoding="utf-8"))
+            oauth = creds.get("claudeAiOauth") or {}
+            re_exp = oauth.get("refreshTokenExpiresAt") or oauth.get("expiresAt")
+            if re_exp and isinstance(re_exp, (int, float)):
+                got["expires"] = int(re_exp / 1000.0 if re_exp > 1e11 else re_exp)
+        except (OSError, ValueError):
+            pass
     _STATUS[str(d)] = (time.time(), got)
     return got
 
@@ -293,7 +338,7 @@ def code(name: str, text: str, wait: float = 90) -> str:
     if name:
         plugin_secrets(d)
     s = status(d, fresh=True)
-    note(name, d, kind="login", error="", **s)
+    note(name, d, kind="login", error="", at=int(time.time()), **s)
     return f"{name or 'own'}: signed in" + (f" as {s['email']}" if s.get("email") else "")
 
 
@@ -329,7 +374,7 @@ def set_secret(name: str, kind: str, value: str, by: str = "") -> str:
             (d / other).unlink(missing_ok=True)
     with LOCK:
         _drop(name)
-    write(d / INFO, {**{k: v for k, v in (owned(d, by) if name else info(d)).items() if k not in ("email", "plan")}, "kind": kind, "error": ""})
+    write(d / INFO, {**{k: v for k, v in (owned(d, by) if name else info(d)).items() if k not in ("email", "plan")}, "kind": kind, "error": "", "at": int(time.time())})
     return f"{name or 'own'}: {'long-lived token' if kind == 'token' else 'API key'} saved" + (" (chats and workers; the terminal keeps its own sign-in)" if not name else "")
 
 
@@ -366,14 +411,34 @@ def listing(windows_of=None, now: float = 0) -> list:
                 _drop(n)
     win = lambda n: [list(w) for w in windows_of(n)] if windows_of else []
     ok, oi = own_kind(), info(kept(""))
-    out = [{"id": "", **status(MAIN), "kind": ok, "windows": win(""), "error": OWN_ERROR[""], **({"login": LOGINS[""]["url"]} if "" in LOGINS and LOGINS[""]["url"] else {}),
+    s = status(MAIN)
+    if ok:
+        prev = secret_preview(kept(""), ok)
+        at = int(oi.get("at") or file_time(kept("") / SECRETS[ok][0]))
+        exp = (at + 365 * 86400) if ok == "token" and at else 0
+    else:
+        prev = ""
+        at = int(oi.get("at") or file_time(MAIN / ".credentials.json"))
+        exp = int(s.get("expires") or 0)
+    out = [{"id": "", **s, "kind": ok, "preview": prev, "at": at, "expires": exp,
+            "windows": win(""), "error": OWN_ERROR[""], **({"login": LOGINS[""]["url"]} if "" in LOGINS and LOGINS[""]["url"] else {}),
             **({"spent": spent("", now), **({"budget": oi["budget"]} if oi.get("budget") else {})} if ok == "apikey" else {})}]
     for n in names():
         d, i = ROOT / n, info(ROOT / n)
         kind = next((k for k, (f, *_) in SECRETS.items() if (d / f).exists()), "") \
             or ("login" if (d / ".credentials.json").exists() or sys.platform == "darwin" and i.get("email") else "")
-        s = status(d) if kind == "login" else {}
-        out.append({"id": n, "kind": kind, "email": s.get("email") or "", "plan": s.get("plan") or "", "error": i.get("error") or "",
+        if kind in SECRETS:
+            prev = secret_preview(d, kind)
+            at = int(i.get("at") or file_time(d / SECRETS[kind][0]))
+            exp = (at + 365 * 86400) if kind == "token" and at else 0
+            st = {}
+        else:
+            prev = ""
+            st = status(d) if kind == "login" else {}
+            at = int(i.get("at") or file_time(d / ".credentials.json"))
+            exp = int(st.get("expires") or 0)
+        out.append({"id": n, "kind": kind, "email": st.get("email") or "", "plan": st.get("plan") or "",
+                    "preview": prev, "at": at, "expires": exp, "error": i.get("error") or "",
                     "by": str(i.get("by") or ""), **({"login": LOGINS[n]["url"]} if n in LOGINS and LOGINS[n]["url"] else {}),
                     "windows": win(n), **({"spent": spent(n, now), **({"budget": i["budget"]} if i.get("budget") else {})} if kind == "apikey" else {})})
     return out
@@ -549,6 +614,7 @@ def self_test():
         keep_usage("werk", [[40.0, "5h", time.time() + 99]])
         acc = {a["id"]: a for a in listing(lambda n: json.loads((folder(n) / USAGE).read_text())["windows"] if n and (folder(n) / USAGE).exists() else [])}
         assert acc["werk"]["kind"] == "token" and acc["werk"]["windows"][0][0] == 40.0 and "spent" not in acc["werk"], acc["werk"]
+        assert acc["werk"]["preview"] == "sk-ant-oat01-…aaaa" and acc["werk"]["at"] > 0 and acc["werk"]["expires"] == acc["werk"]["at"] + 365 * 86400
         add_spend("werk", 1.5)
         assert spent("werk") == 0.0, "a subscription's turns cost no money"
         set_secret("werk", "apikey", key, by="bob")
@@ -558,6 +624,7 @@ def self_test():
         assert set_budget("werk", 20) == "werk: budget $20.00 a month"
         acc = {a["id"]: a for a in listing()}["werk"]
         assert (acc["spent"], acc["budget"], acc["by"]) == (1.75, 20, "bob"), acc  # made before by was given: the next one who signs it in owns it
+        assert acc["preview"] == "sk-ant-api03-…kkkk" and acc["at"] > 0 and acc["expires"] == 0
         assert spent("werk", time.time() + 40 * 86400) == 0.0, "a new month starts at zero"
         set_secret("nieuw", "apikey", key, by="bob")
         assert {a["id"]: a for a in listing()}["nieuw"]["by"] == "bob" and info(folder("nieuw"))["by"] == "bob"
