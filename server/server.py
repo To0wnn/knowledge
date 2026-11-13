@@ -6728,7 +6728,7 @@ def action_args(action: str, args: dict) -> dict:
     if action == "trust_hooks":
         return {"agent": agent()}
     if action in ("claude_login", "claude_code", "claude_token", "claude_key", "claude_remove", "claude_budget", "claude_logout"):  # Claude accounts (accounts.py)
-        own = action in ("claude_login", "claude_code", "claude_logout") and args.get("account", "") == ""  # the pc's own sign-in
+        own = action != "claude_remove" and args.get("account", "") == ""  # the pc's own: sign in or out, a token or key behind it, its budget
         if action == "claude_logout" and not own:
             raise ValueError("Sign out is for the pc's own sign-in; Remove takes an extra account away")
         if not own and not CLAUDE_ACCOUNT.fullmatch(str(args.get("account", ""))):

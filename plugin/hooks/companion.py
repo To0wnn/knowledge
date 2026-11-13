@@ -1390,8 +1390,8 @@ def check_workers(ws: dict, tok: str, now: float, lim: dict):
                 # exit code unknown (the companion restarted while it ran): its outcome decides, below: a task handed
                 # back or gone is finished, one still open failed
                 w.update(status="stopped" if w.get("told") or w.get("chat") else "finished" if code in (0, "unknown") else "failed", ended=now, code=code)
-                if w.get("account") and w.get("log"):  # an API key worker's money, once, at its end
-                    accounts.add_spend(w["account"], workers.claude_cost(w["log"]))
+                if w.get("agent") == "claude" and w.get("log"):  # an API key worker's money, once, at its end
+                    accounts.add_spend(w.get("account", ""), workers.claude_cost(w["log"]))
                 if not w.get("owner_stopped"):  # stopped on purpose: no other pc may take it at once, only after the lease
                     release(w, tok)  # a line it claimed but left open may start again at once (the server's idle notice)
                 workers.stop_path(w).unlink(missing_ok=True)
@@ -2055,8 +2055,9 @@ def one_round(only: str = "") -> dict:
     if (why := awake.hold(working and not awake.off())) != st.get("awake_error", ""):  # said once, and once when it works again
         log("error" if why else "sync", f"Could not keep this pc awake while an agent works: {why}" if why else "This pc is kept awake while an agent works again")
         st["awake_error"] = why
-    if knowledge_update_due(NEWEST["v"], [version(), *(plugin_version(a) for a in AGENTS if installed(a) and a not in later)], bool(busy), st.get("knowledge_updated", 0), now):
-        st["knowledge_updated"] = now
+    if knowledge_update_due(NEWEST["v"], [version(), *(plugin_version(a) for a in AGENTS if installed(a) and a not in later)], bool(busy),
+                            st.get("knowledge_updated", 0), now, st.get("knowledge_tried", "")):
+        st["knowledge_updated"], st["knowledge_tried"] = now, NEWEST["v"]
         knowledge_update_soon()
     if agents_update_due(st, load("workers.json", {}), now):
         st["agents_updated"] = now
@@ -2546,9 +2547,11 @@ def adopt_aliases(given) -> None:
 KNOWLEDGE_RETRY = 1800  # seconds between two tries of the same update by itself (a failing one must not loop)
 
 
-def knowledge_update_due(newest: str, have: list, busy: bool, last: float, now: float) -> bool:
+def knowledge_update_due(newest: str, have: list, busy: bool, last: float, now: float, tried: str = "") -> bool:
     """A newer Knowledge than this companion or one of its agents' plugins runs (agents waiting to close left out):
-    update by itself, as the Update button does, when nothing runs here and the last try is a while ago."""
+    update by itself, as the Update button does, when nothing runs here, at once for a version not tried yet, a version
+    tried before only a while later (a failing one must not loop; one wait for every version held a release out of a
+    pc for up to 30 minutes, 13 Nov 2026)."""
     def num(v):  # a commit as version (Claude Code lists one for a git install) says nothing about behind: skipped
         try:
             return tuple(map(int, v.split(".")))
@@ -2556,7 +2559,7 @@ def knowledge_update_due(newest: str, have: list, busy: bool, last: float, now: 
             return None
     want = num(newest)
     behind = want is not None and any((n := num(v)) is not None and n < want for v in have)
-    return behind and not busy and now - last >= KNOWLEDGE_RETRY and os.environ.get("KNOWLEDGE_AUTO_UPDATE") != "0"
+    return behind and not busy and (newest != tried or now - last >= KNOWLEDGE_RETRY) and os.environ.get("KNOWLEDGE_AUTO_UPDATE") != "0"
 
 
 def knowledge_update_soon():
@@ -3403,10 +3406,11 @@ def main(argv: list):
             why = update_own_checkout(co)
             assert "could not move" in why and (co / "g").exists() and (co / "f").read_text() == "2", why
             assert update_own_checkout(Path(g) / "nothing") == "", "not a checkout: nothing to do"
-        due = lambda newest, have, busy=False, last=0: knowledge_update_due(newest, have, busy, last, 10_000)
+        due = lambda newest, have, busy=False, last=0, tried="1.2.3": knowledge_update_due(newest, have, busy, last, 10_000, tried)
         assert due("1.2.3", ["1.2.2", "1.2.3"]) and not due("1.2.3", ["1.2.3", ""]), "behind: by itself; current: not"
         assert not due("1.2.3", ["1.2.2"], busy=True) and not due("1.2.3", ["1.2.2"], last=9_000) and not due("", ["1.2.2"]), "busy, just tried, or no word"
         assert due("1.2.3", ["abc123", "1.2.2"]) and not due("1.2.3", ["abc123", "1.2.3"]), "a commit as version does not stop the update"
+        assert due("1.2.4", ["1.2.3"], last=9_000) and not due("1.2.4", ["1.2.3"], last=9_000, tried="1.2.4"), "a newer version at once, the same one not again soon"
         real_run, real_up, calls = agy_running, self_update.run, []  # agy open on Windows: its update waits, then runs once it closed
         globals()["agy_running"], self_update.run = (lambda: True), (lambda a, have=None: calls.append(a) or None)
         write_json(STATE / AGY_LATER, {"at": 1})

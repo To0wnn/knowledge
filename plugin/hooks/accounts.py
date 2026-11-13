@@ -133,10 +133,22 @@ def names() -> list:
     return sorted(p.name for p in ROOT.iterdir() if p.is_dir() and ID.fullmatch(p.name)) if ROOT.is_dir() else []
 
 
+def kept(name: str) -> Path:
+    """Where account `name` keeps its token or key, spending and budget: its folder, and for the pc's own sign-in a
+    folder of ours beside them (never in ~/.claude, whose sign-in stays the terminal's)."""
+    return ROOT / ".own" if name == "" else folder(name)
+
+
+def own_kind() -> str:
+    """"token" or "apikey" when the pc's own account runs chats and workers on one; "" when on its browser sign-in."""
+    return next((k for k, (f, *_) in SECRETS.items() if (kept("") / f).exists()), "")
+
+
 def env(name: str) -> dict:
-    """What a Claude run under account `name` adds to its environment; {} for the default account."""
+    """What a Claude run under account `name` adds to its environment; for the pc's own sign-in only its token or key
+    when it has one ({} otherwise: the run uses ~/.claude as before)."""
     if not name:
-        return {}
+        return {var: (kept("") / f).read_text(encoding="utf-8").strip() for kind, (f, var, _, _) in SECRETS.items() if kind == own_kind()}
     d = folder(name)
     if not d.is_dir():
         raise RuntimeError(f"there is no Claude account {name} on this pc (Machines > Claude Code > Accounts)")
@@ -276,9 +288,9 @@ def code(name: str, text: str, wait: float = 90) -> str:
         said = next((x for x in reversed(rec["out"]) if x.strip()), "no answer")
         note(name, d, error=said[-300:])
         raise RuntimeError(f"sign-in failed: {said[-200:]}")
+    for f, _, _, _ in SECRETS.values():  # a browser sign-in replaces a token or key (the pc's own: kept beside ~/.claude)
+        (kept(name) / f).unlink(missing_ok=True)
     if name:
-        for f, _, _, _ in SECRETS.values():  # a browser sign-in replaces a token or key
-            (d / f).unlink(missing_ok=True)
         plugin_secrets(d)
     s = status(d, fresh=True)
     note(name, d, kind="login", error="", **s)
@@ -303,8 +315,11 @@ def set_secret(name: str, kind: str, value: str, by: str = "") -> str:
     f, _, form, what = SECRETS[kind]
     if not re.fullmatch(form, value or ""):
         raise ValueError(f"that is not {what}")
-    d = folder(name)
-    sync(d)
+    d = kept(name)
+    if name:
+        sync(d)
+    else:
+        d.mkdir(parents=True, exist_ok=True)
     fd, tmp = tempfile.mkstemp(dir=d, prefix=f + ".")
     with os.fdopen(fd, "w", encoding="utf-8") as out:
         out.write(value)
@@ -314,8 +329,8 @@ def set_secret(name: str, kind: str, value: str, by: str = "") -> str:
             (d / other).unlink(missing_ok=True)
     with LOCK:
         _drop(name)
-    write(d / INFO, {**{k: v for k, v in owned(d, by).items() if k not in ("email", "plan")}, "kind": kind, "error": ""})
-    return f"{name}: {'long-lived token' if kind == 'token' else 'API key'} saved"
+    write(d / INFO, {**{k: v for k, v in (owned(d, by) if name else info(d)).items() if k not in ("email", "plan")}, "kind": kind, "error": ""})
+    return f"{name or 'own'}: {'long-lived token' if kind == 'token' else 'API key'} saved" + (" (chats and workers; the terminal keeps its own sign-in)" if not name else "")
 
 
 def remove(name: str) -> str:
@@ -350,7 +365,9 @@ def listing(windows_of=None, now: float = 0) -> list:
             if now - rec["at"] > LOGIN_TTL or rec["p"].poll() is not None:
                 _drop(n)
     win = lambda n: [list(w) for w in windows_of(n)] if windows_of else []
-    out = [{"id": "", **status(MAIN), "windows": win(""), "error": OWN_ERROR[""], **({"login": LOGINS[""]["url"]} if "" in LOGINS and LOGINS[""]["url"] else {})}]
+    ok, oi = own_kind(), info(kept(""))
+    out = [{"id": "", **status(MAIN), "kind": ok, "windows": win(""), "error": OWN_ERROR[""], **({"login": LOGINS[""]["url"]} if "" in LOGINS and LOGINS[""]["url"] else {}),
+            **({"spent": spent("", now), **({"budget": oi["budget"]} if oi.get("budget") else {})} if ok == "apikey" else {})}]
     for n in names():
         d, i = ROOT / n, info(ROOT / n)
         kind = next((k for k, (f, *_) in SECRETS.items() if (d / f).exists()), "") \
@@ -370,7 +387,7 @@ def spent(name: str, now: float = 0) -> float:
     """What an API key account's chat turns and workers cost this month (Claude Code's own total_cost_usd per turn):
     the API itself has no balance a key can read."""
     try:
-        got = json.loads((folder(name) / SPEND).read_text(encoding="utf-8"))
+        got = json.loads((kept(name) / SPEND).read_text(encoding="utf-8"))
         return round(float(got["usd"]), 4) if got.get("month") == month(now or time.time()) else 0.0
     except (OSError, ValueError, KeyError, TypeError):
         return 0.0
@@ -379,7 +396,7 @@ def spent(name: str, now: float = 0) -> float:
 def add_spend(name: str, usd: float):
     """Count one turn's cost for an API key account (a subscription's cost is no money spent: not counted)."""
     try:
-        d = folder(name)
+        d = kept(name)
         if not (d / SECRETS["apikey"][0]).exists() or not 0 < usd < 10_000:
             return
         with LOCK:
@@ -390,13 +407,13 @@ def add_spend(name: str, usd: float):
 
 def set_budget(name: str, usd: float) -> str:
     """A monthly budget for an API key account (0: none): the page shows what is left of it."""
-    d = folder(name)
+    d = kept(name)
     if not d.is_dir():
         raise RuntimeError(f"there is no Claude account {name} on this pc")
     if not 0 <= usd < 1_000_000:
         raise ValueError("a budget is 0 (none) up to 1000000 dollars a month")
     write(d / INFO, {**{k: v for k, v in info(d).items() if k != "budget"}, **({"budget": round(usd, 2)} if usd else {})})
-    return f"{name}: " + (f"budget ${usd:.2f} a month" if usd else "no budget")
+    return f"{name or 'own'}: " + (f"budget ${usd:.2f} a month" if usd else "no budget")
 
 
 def keep_usage(name: str, got: list):
@@ -489,6 +506,19 @@ def self_test():
         assert code("", "good#code").startswith("own: signed in") and not (MAIN / INFO).exists(), "no file of ours in ~/.claude"
         assert json.loads((MAIN / ".credentials.json").read_text())["claudeAiOauth"]["accessToken"] == "new"
         assert logout_own() == "own: signed out" and not (MAIN / ".credentials.json").exists()
+        # the pc's own on a long-lived token or API key: for the companion's runs only, beside ~/.claude, never in it
+        assert env("") == {} and own_kind() == ""
+        own_key = "sk-ant-api03-" + "o" * 40
+        assert set_secret("", "apikey", own_key).startswith("own: API key saved") and env("") == {"ANTHROPIC_API_KEY": own_key}
+        add_spend("", 0.5)
+        set_budget("", 5)
+        o = {a["id"]: a for a in listing()}[""]
+        assert (o["kind"], o["spent"], o["budget"]) == ("apikey", 0.5, 5) and not list(MAIN.glob(OWN + "*")), o
+        set_secret("", "token", "sk-ant-oat01-" + "o" * 40)
+        assert list(env("")) == ["CLAUDE_CODE_OAUTH_TOKEN"] and ".own" not in names()
+        login("")
+        code("", "good#code")
+        assert env("") == {} and own_kind() == "", "a browser sign-in of the pc's own drops its token"
         write(MAIN / ".credentials.json", {"claudeAiOauth": {"accessToken": "main"}})
         try:
             code("thuis", "good#code")

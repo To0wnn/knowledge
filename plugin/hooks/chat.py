@@ -281,11 +281,11 @@ def parse(agent: str, line: str, st: dict) -> list:
         if t == "assistant" and not e.get("parent_tool_use_id") and isinstance((e.get("message") or {}).get("usage"), dict):
             u = e["message"]["usage"]  # the main agent's context now: what it sent for this step
             st["ctx"] = tokens(u) - int(u.get("output_tokens") or 0)
-        if t == "result" and st.get("account") and isinstance(e.get("total_cost_usd"), (int, float)):
+        if t == "result" and agent == "claude" and isinstance(e.get("total_cost_usd"), (int, float)):
             # an API key's money: total_cost_usd is the whole process so far (measured, claude 2.1.323: two turns gave
             # 0.00061 then 0.00072), so only what this turn added; a subscription's is not counted (accounts.add_spend)
             cost = float(e["total_cost_usd"])
-            accounts.add_spend(st["account"], cost - st.get("cost_seen", 0.0) if cost >= st.get("cost_seen", 0.0) else cost)
+            accounts.add_spend(st.get("account", ""), cost - st.get("cost_seen", 0.0) if cost >= st.get("cost_seen", 0.0) else cost)
             st["cost_seen"] = cost
         if t == "result" and isinstance(e.get("usage"), dict):
             out.append(usage(tokens=tokens(e["usage"]), **({"ctx": st["ctx"]} if st.get("ctx") else {})))
@@ -1131,9 +1131,10 @@ class Live:
         env = {**os.environ, "KNOWLEDGE_CHAT": self.cid, "KNOWLEDGE_ASKS": str(workers.ASKS / f"{workers.safe(self.cid)}.txt")}
         if item.get("reader"):
             env["CLAUDE_CODE_SUBAGENT_MODEL"] = str(item["reader"])
-        if self.account:  # another Claude account: its own config folder, and its token or API key when it has one, never the pc's
-            env = {k: v for k, v in env.items() if k not in accounts.AUTH_ENV}
-            env.update(accounts.env(self.account))
+        # another Claude account (its own config folder, its token or key), or the pc's own on a token or key: never
+        # the token or key the pc's environment holds
+        if self.agent == "claude" and (extra := accounts.env(self.account)):
+            env = {**{k: v for k, v in env.items() if k not in accounts.AUTH_ENV}, **extra}
         if self.admin is False:  # admin is on here, not for this chat (a guest's): it may not raise its rights (Linux)
             cmd = admin_rights.no_raise(cmd)
         self.p = Hosted(LIVE_DIR / f"{self.cid}-{secrets.token_hex(4)}", cmd, self.folder, env if yolo else workers.git_safe_env(env),

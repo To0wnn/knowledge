@@ -384,9 +384,10 @@ def start(agent: str, task: dict, machine: str, where: dict, yolo: bool, nonce: 
     log = DIR / f"{safe(task['project'])}-{safe(task['id'])}-{int(time.time())}.log"
     env = {**os.environ, "KNOWLEDGE_WORKER": task["id"], "KNOWLEDGE_START_NONCE": nonce, "KNOWLEDGE_YOLO": "1" if yolo else "",
            "KNOWLEDGE_ASKS": remember_ask(f"task-{task['project']}-{task['id']}", task.get("text") or "")}
-    if account:
+    if agent == "claude":
         import accounts  # here: accounts imports this module for its .cmd shim
-        env = {**{k: v for k, v in env.items() if k not in accounts.AUTH_ENV}, **accounts.env(account)}
+        if extra := accounts.env(account):  # another account, or the pc's own on a token or key
+            env = {**{k: v for k, v in env.items() if k not in accounts.AUTH_ENV}, **extra}
     env = env if yolo else git_safe_env(env)
     ckpt = checkpoint(where["cwd"], task["id"]) if yolo and where.get("branch") else ""
     cmd, note = argv(agent, exe, prompt(task, agent, machine, where, yolo), yolo, where), ""
