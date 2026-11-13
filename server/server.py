@@ -3223,9 +3223,10 @@ def joined_ok(mid: str, c: dict) -> list[str]:
 
 
 def guest_device(dev: dict) -> dict:
-    """A turn of a guest's chat calls the server with the pc owner's token: there it reaches only the chat's project,
-    writes only when the guest may write it, and lists or reads only the chats there the guest may steer (the owner's other
-    chats and projects stay theirs). Any other turn: the device as it is."""
+    """A turn of a guest's chat calls the server with the pc owner's token: there it reaches only what that token and every
+    person in the chat may each read themselves (so the owner's other projects stay theirs, while a project both share,
+    such as a server repo next to its app, stays readable), writes only where all of them may, and lists or reads only the
+    chats there the guest may steer (the owner's other chats stay theirs). Any other turn: the device as it is."""
     try:
         c = read_json(chat_file(dev["machine"], dev["chat"]), None) or {}
     except ValueError:
@@ -3233,12 +3234,13 @@ def guest_device(dev: dict) -> dict:
     joined = joined_ok(dev["machine"], c)
     if not c.get("guest") and not joined:
         return dev
-    p, by = c.get("project") or "", c.get("by", "")
-    people = ([by] if c.get("guest") else []) + joined  # a joined chat: what every guest in it may, not more
-    roots = [r for r in PROJECTS.get(p, ()) if not dev.get("roots") or r in dev["roots"]] or ["\0none"]  # never [] (= everything)
-    users = read_json(USERS_FILE, {})
-    may_write = all(u in ADMINS or users.get(u, {}).get("projects", {}).get(p) == "write" for u in people)
-    return {**dev, "roots": roots, "write": bool(dev.get("write")) and may_write, "skills": False, "guest_chat": ", ".join(people)}
+    people = ([c.get("by", "")] if c.get("guest") else []) + joined  # a joined chat: what every guest in it may, not more
+    # an empty roots list means everything: spell it out first, so owned_scope can cut it down
+    scoped = {**dev, "roots": dev.get("roots") or [r for v in PROJECTS.values() for r in v]}
+    for u in people:
+        scoped = scoped and owned_scope(scoped, user_device(u))
+    scoped = scoped or {**dev, "roots": ["\0none"], "write": False, "write_roots": []}  # never [] (= everything)
+    return {**scoped, "skills": False, "guest_chat": ", ".join(people)}
 
 
 def shared_row(mid: str, m: dict, shared: dict, now: float) -> dict:
@@ -3428,7 +3430,7 @@ def owned_scope(dev: dict, user: dict | None) -> dict | None:
     roots = [r for r in dev["roots"] if r in user["roots"]]
     if not roots:  # empty roots would mean "everything"
         return None
-    write_roots = [r for r in roots if r in user["write_roots"]] if dev["write"] else []
+    write_roots = [r for r in roots if r in user["write_roots"] and (dev.get("write_roots") is None or r in dev["write_roots"])] if dev["write"] else []
     return {**dev, "roots": roots, "write_roots": write_roots, "write": bool(write_roots), "watch": False, "skills": False}
 
 
@@ -3437,6 +3439,8 @@ assert owned_scope({"roots": ["a", "a-memory", "b"], "write": True, "watch": Tru
     {"roots": ["a", "a-memory"], "write": True, "write_roots": ["a-memory"], "watch": False, "skills": False}
 assert owned_scope({"roots": ["b"], "write": False, "watch": False}, {"roots": ["a"], "write_roots": []}) is None
 assert owned_scope({"roots": ["a"], "write": False}, None) is None
+assert owned_scope({"roots": ["a", "a-memory"], "write": True, "write_roots": ["a-memory"]},
+                   {"roots": ["a", "a-memory"], "write_roots": ["a", "a-memory"]})["write_roots"] == ["a-memory"]  # never wider than the token
 
 
 def write_json(path: Path, data):

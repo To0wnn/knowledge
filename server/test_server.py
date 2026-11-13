@@ -1706,6 +1706,19 @@ def share_contract(tmp, ck, fr, raw, er, et):
     err, text = call("knowledge_write", {"path": "garden-memory/guest_try.md", "content": memo("x\n", "guest_try")}, token=fr, headers=turn)
     assert err, text
     assert not call("knowledge_read", {"path": "garden-memory/MEMORY.md"}, token=fr, headers=turn)[0]
+    # Another project the owner's token reaches (a server repo next to its app): readable when she may read it herself, never
+    # written as a read member; one she may not read stays the owner's.
+    toks = json.loads((tmp / "tokens.json").read_text())
+    toks["friend-pc"]["roots"] += ["trade", "trade-memory"]
+    (tmp / "tokens.json").write_text(json.dumps(toks))
+    r = call("knowledge_read", {"path": "trade-memory/MEMORY.md"}, token=fr, headers=turn)
+    assert not r[0] and was.get("trade") == "read", (r, was)
+    assert call("knowledge_write", {"path": "trade-memory/guest_try.md", "content": memo("x\n", "guest_try")}, token=fr, headers=turn)[0]
+    ui("/ui/api/admin/user", {"username": "erin", "projects": {**{k: v for k, v in was.items() if k != "trade"}, "garden": "read"}})
+    assert "not shared with this device" in call("knowledge_read", {"path": "trade-memory/MEMORY.md"}, token=fr, headers=turn)[1]
+    ui("/ui/api/admin/user", {"username": "erin", "projects": {**was, "garden": "read"}})
+    toks["friend-pc"]["roots"] = toks["friend-pc"]["roots"][:-2]
+    (tmp / "tokens.json").write_text(json.dumps(toks))
     owner_list = {c["id"]: c for c in json.loads(ui("/ui/api/chats")[2])["chats"] if c["machine"] == mid}
     assert owner_list[g["id"]]["guest"] and owner_list[g["id"]]["rights"] == "act", owner_list  # the owner sees and can stop it
     assert any(i["kind"] == "chat" and i["id"] == g["id"] for i in json.loads(ui("/ui/api/board", h=er)[2])["items"])

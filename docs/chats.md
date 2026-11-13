@@ -23,8 +23,8 @@ from a phone. The pc side runs in the companion ([companion.md](companion.md)).
   the box; not for the pc's owner) lets both steer it: the chat stays the owner's and the guest is in `joined`; in a
   joined or taken chat every message carries its writer (`by` on the event, shown above someone else's message), the
   agent gets it as `[from <name>] ...`, and messages sent meanwhile queue in order as always; while anyone is in it, it runs as a guest's chat (no YOLO unless every guest
-  in it has `yolo`, so a YOLO turn running at a join under use stops first; its agent reaches only that project and
-  writes only when every guest may); a guest whose share ends leaves by themselves at the next poll. **Typing**: in a
+  in it has `yolo`, so a YOLO turn running at a join under use stops first; its agent reaches only what the owner's token
+  and every guest may each read, and writes only where every guest may); a guest whose share ends leaves by themselves at the next poll. **Typing**: in a
   chat someone else may see (`watched`), the page says `POST /ui/api/chat/typing` at most every 3 s while you type, and
   the others see "<name> is typing…" for 6 s (`typing` with the chat; RAM only). With Settings "show what I type" on
   (`live_typing`, the default) the ping carries the box's text, at most every second plus the last words, and the
@@ -34,8 +34,9 @@ from a phone. The pc side runs in the companion ([companion.md](companion.md)).
   means they can have anything run as the owner on that pc, so share it only with someone you would give a shell. A
   guest's chat (`guest: true`) always gets its own worktree, so it never works in the owner's checkout (the companion
   refuses one in a folder outside git). Its turns call the server with the owner's token, so the server narrows that
-  token for them (`guest_device`, by the turn's `X-Knowledge-Chat`): only the chat's project, writing only when the
-  guest may write it, and `knowledge_chats` / `knowledge_chat_read` / `knowledge_chat_close` reach only the chats on that pc every guest in it may steer (their own, taken over or joined), never the owner's other chats. Under use it never runs YOLO: the work item carries `guest` and the companion (one
+  token for them (`guest_device`, by the turn's `X-Knowledge-Chat`): only the projects that token and every person in
+  the chat may each read themselves (so the owner's other projects stay theirs, while a project both have, such as a
+  server repo next to the app it serves, stays readable), writing only where all of them may write, and `knowledge_chats` / `knowledge_chat_read` / `knowledge_chat_close` reach only the chats on that pc every guest in it may steer (their own, taken over or joined), never the owner's other chats. Under use it never runs YOLO: the work item carries `guest` and the companion (one
   that reports `guests: true`, else the start is refused) runs it with every tool call asked. **Use with YOLO**
   (`yolo`, the owner types YOLO to give it) adds `guest_yolo`, so the pc's own YOLO switch counts as for the owner's
   chats; **YOLO and admin** (`admin`, typed ADMIN) also adds `guest_admin`: the pc's admin rights when its owner switched them on
