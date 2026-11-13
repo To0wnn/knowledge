@@ -433,6 +433,11 @@ async def admin(browser, secret: str) -> None:
     else:
         print("skip token screen checks (server older than the onboarding change)")
     check(not await pg.locator("#error").is_visible(), "admin page shows no error")
+    # People: a card per project with its members, why they have access and what each pc shares with them.
+    await pg.click('[data-sec="people"]')
+    cards = await pg.locator("#members .members-card").count()
+    check(cards == await pg.evaluate("state.projects.length"), f"admin: People has a members card per project ({cards})")
+    await pg.click('[data-sec="tokens"]')
     # Rename: on every project made in the UI for an admin, and for a person on the ones they made. The server's answers
     # are faked here, so nothing is renamed (this also runs read-only against the live server).
     built = await pg.evaluate("state.projects.filter((p) => !p.builtin).length")
@@ -441,7 +446,9 @@ async def admin(browser, secret: str) -> None:
     check(renames == built, f"admin: a Rename button on each project made in the UI ({renames} of {built})")
     fake = {"admin": False, "user": "erin", "tokens": [], "limits": {"projects": 3, "tokens": 5, "project_mb": 20, "created": 1},
             "projects": [{"name": "erinproj", "docs": "erinproj", "memory": "erinproj-memory", "builtin": False, "label": None, "mode": "write", "mine": True, "was": ["oldname"]},
-                         {"name": "shared1", "docs": "shared1", "memory": "shared1-memory", "builtin": False, "label": None, "mode": "read", "mine": False, "was": []}]}
+                         {"name": "shared1", "docs": "shared1", "memory": "shared1-memory", "builtin": False, "label": None, "mode": "read", "mine": False, "was": []}],
+            "members": {"erinproj": [{"user": "dave", "mode": "read", "source": "invited by erin"}, {"user": "erin", "mode": "write", "source": "creator"}]},
+            "pcs": [{"id": "e1", "label": "erin-pc", "mine": True, "owner": "erin", "projects": ["erinproj"], "shares": {"erinproj": {"dave": "view"}}}]}
     sent = []
     await pg.route("**/ui/api/admin", lambda r: r.fulfill(status=200, json=fake) if r.request.method == "GET" else r.continue_())
     await pg.route("**/ui/api/admin/project-rename", lambda r: (sent.append(r.request.post_data_json), r.fulfill(status=200, json={
@@ -451,6 +458,10 @@ async def admin(browser, secret: str) -> None:
     mine = pg.locator("#project-rows tr", has_text="erinproj").locator("button", has_text="Rename")
     check(await mine.count() == 1 and await pg.locator("#project-rows tr", has_text="shared1").locator("button").count() == 0
           and "was oldname" in rows[0], f"a person: Rename only on the project they made, with its old name {rows}")
+    panel = await pg.evaluate("""() => ({shown: !$('my-members-box').hidden, cards: document.querySelectorAll('#my-members .members-card').length,
+        dave: document.querySelector('#my-members select[aria-label="dave: your chats on erin-pc in erinproj"]')?.value,
+        maker: document.querySelector('#my-members select[aria-label="erin: access to erinproj"]')?.disabled})""")
+    check(panel == {"shown": True, "cards": 1, "dave": "view", "maker": True}, f"a person: members of the project they made, with their pc's share {panel}")
     pg.once("dialog", lambda d: asyncio.ensure_future(d.accept("erinnew")))
     await mine.click()
     check(await comes_true(pg, "$('toasts').innerText.includes('Renamed erinproj to erinnew')") and sent == [{"name": "erinproj", "to": "erinnew"}],

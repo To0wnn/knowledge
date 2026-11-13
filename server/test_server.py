@@ -1566,6 +1566,8 @@ def share_contract(tmp, ck, fr, raw, er, et):
     assert {c["project"] for c in cands} >= {"garden"} and {"user": "erin", "mode": ""} in next(c for c in cands if c["project"] == "garden")["members"], cands
     assert share("view")[0] == 200
     assert rows(ck)[mid]["shares"] == {"garden": {"erin": "view"}}
+    pcs = {p["id"]: p for p in json.loads(raw("GET", "/ui/api/admin", headers=ck)[2])["pcs"]}  # People shows it next to access
+    assert pcs[mid] == {"id": mid, "label": "attic", "mine": True, "owner": "alice", "projects": ["garden", "trade"], "shares": {"garden": {"erin": "view"}}}, pcs[mid]
     r = rows(er)[mid]  # trimmed: none of the owner's tokens, sessions, workers or other folders
     assert r["shared"] == {"garden": "view"} and r["tokens"] == [] and r["agents"] == {} and r["companion"]["folders"]["linked"] == [] and not r["own"], r
     seen = {c["id"]: c["rights"] for c in json.loads(ui("/ui/api/chats", h=er)[2])["chats"] if c["machine"] == mid}
@@ -4251,6 +4253,38 @@ def main():
         assert admin("/ui/api/admin/project-rename", {"name": "erinproj", "to": "Bad-Name"}, er)[0] == 400  # the third today
         assert admin("/ui/api/admin/project-rename", {"name": "erinproj", "to": "erinnew"}, er)[0] == 429  # a fourth waits a day
         assert "erinproj" in json.loads(raw("GET", "/ui/api/admin", headers=ck)[2])["users"]["erin"]["created"]
+        # Members: the maker of a project adds people who already sign in here (read or write), an admin any project;
+        # the panel says why each has access, and their tokens that reach all they had reach the new project too.
+        member = lambda project, who, mode, hdr=er: admin("/ui/api/project/member", {"project": project, "user": who, "mode": mode}, hdr)
+        assert raw("GET", "/ui", headers=user("dave"))[0] == 403  # signs in once: known, no access yet
+        assert admin("/ui/api/admin/user", {"username": "dave", "projects": {"trade": "read"}})[0] == 200
+        dt = json.loads(admin("/ui/api/admin/token", {"name": "pc", "roots": ["trade", "trade-memory"]}, user("dave"))[2])["token"]
+        assert member("trade", "dave", "write")[0] == 403  # not her project
+        tries = [member("erinproj", who, "read") for who in ("nobody", "alice", "erin")]  # unknown, an admin, herself
+        assert {t[0] for t in tries} == {400} and len({t[2].replace(w.encode(), b"") for t, w in zip(tries, ("nobody", "alice", "erin"))}) == 1, tries
+        assert member("erinproj", "dave", "admin")[0] == 400 and member("erinproj", "dave", "")[2].count(b"invited") == 0  # no such mode; nothing to take
+        st, _, res = member("erinproj", "dave", "read")
+        maker = {"user": "erin", "mode": "write", "source": "creator"}
+        assert st == 200 and json.loads(res)["members"] == [{"user": "dave", "mode": "read", "source": "invited by erin"}, maker] \
+            and json.loads(res)["tokens_widened"] == ["dave.pc"], res
+        assert not call("knowledge_read", {"path": "erinproj-memory/MEMORY.md"}, token=dt)[0]  # his pc reaches it at once
+        assert json.loads(raw("GET", "/ui/api/admin", headers=er)[2])["members"] == {"erinproj": [{"user": "dave", "mode": "read", "source": "invited by erin"}, maker]}
+        assert member("erinproj", "erin", "", ck)[0] == 400  # the maker keeps write
+        assert member("erinproj", "dave", "write", ck)[0] == 200
+        assert json.loads(raw("GET", "/ui/api/admin", headers=ck)[2])["members"]["erinproj"] == [
+            {"user": "dave", "mode": "write", "source": "invited by alice"}, maker]
+        shares = tmp / "machine_shares.json"  # a pc share of his there ends with his access, so adding him back revives none
+        was_shares = json.loads(shares.read_text()) if shares.exists() else {}
+        shares.write_text(json.dumps({**was_shares, "e0e0e0e0e0e0e0e0": {"by": "erin", "projects": {"erinproj": {"dave": "yolo"}}}}))
+        users_was = json.loads(raw("GET", "/ui/api/admin", headers=ck)[2])["users"]["erin"]["projects"]
+        assert admin("/ui/api/admin/user", {"username": "erin", "projects": {**users_was, "erinproj": "read"}})[0] == 200
+        assert member("erinproj", "dave", "read")[0] == 403  # a maker who may only read gives nothing
+        assert admin("/ui/api/admin/user", {"username": "erin", "projects": users_was})[0] == 200
+        assert member("erinproj", "dave", "")[0] == 200
+        assert json.loads(shares.read_text()) == was_shares
+        assert json.loads(raw("GET", "/ui/api/admin", headers=ck)[2])["users"]["dave"]["projects"] == {"trade": "read"}
+        assert "invited" not in json.loads(raw("GET", "/ui/api/admin", headers=ck)[2])["users"]["dave"]
+        assert admin("/ui/api/admin/user", {"username": "dave", "delete": True})[0] == 200
         machines_contract(tmp, ck, fr, raw, er, et, heard)
         chats_contract(tmp, ck, fr, raw, er, et)
         share_contract(tmp, ck, fr, raw, er, et)

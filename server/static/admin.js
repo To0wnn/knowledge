@@ -184,63 +184,134 @@ function renderTokens() {
   }));
 }
 
+// Members per project, one card each: access (admin or the project's maker), why they have it, and what every pc with
+// that project linked shares with them. Access alone shows no chats: those run on a pc, and only its owner shares it
+// (the same record as Machines › Share…), so your own pcs get a select on the row and someone else's show as text.
+const SHARE_WORDS = { "": "Off", view: "View chats", use: "View and use", yolo: "Use with YOLO" };
+const openCards = new Set();  // cards unfolded by hand, kept across reloads
+let justAdded = null;  // {project, user}: their row asks right away whether to share your pcs
+function pcShares(user, project) {
+  const pcs = (state.pcs || []).filter((m) => m.projects.includes(project) && m.owner !== user);
+  const box = el("div", "pc-shares");
+  const own = (state.pcs || []).filter((m) => m.projects.includes(project) && m.owner === user).map((m) => m.label);
+  if (!pcs.length) { box.append(el("span", "muted", own.length ? `chats on their own pc (${own.join(", ")})` : "no pc has this project linked")); return box; }
+  const ask = justAdded && justAdded.project === project && justAdded.user === user;
+  for (const m of pcs) {
+    let mode = ((m.shares[project] || {})[user]) || "";
+    const line = el("div", "pc-share");
+    line.append(el("span", "muted", `${m.label}`));
+    if (!m.mine) { line.append(el("span", mode ? "" : "muted", SHARE_WORDS[mode] || mode)); line.title = `Only the owner of ${m.label} shares it`; box.append(line); continue; }
+    const sel = el("select", "small" + (ask && !mode ? " ask" : ""));
+    sel.setAttribute("aria-label", `${user}: your chats on ${m.label} in ${project}`);
+    sel.title = `What ${user} sees and may do of your chats on ${m.label} in ${project}`;
+    for (const [v, t] of Object.entries(SHARE_WORDS)) sel.append(new Option(t, v));
+    sel.value = mode;
+    sel.onchange = async () => {
+      if (sel.value === "use" && !confirm(`Let ${user} run agents on ${m.label} in ${project}?\n\nTheir agents run as you on this pc (files, network, your agent subscription). Every tool call asks them first: give this only to someone you would give a shell.`)) { sel.value = mode; return; }
+      if (sel.value === "yolo" && prompt(`${user}'s chats on ${m.label} (${project}) then run with this pc's YOLO switch: no tool call asked, as you on this pc, on your agent subscription. Type YOLO to allow it.`) !== "YOLO") { sel.value = mode; return; }
+      showError(null);
+      try {
+        await api("/ui/api/machine/share", { machine: m.id, project, user, mode: sel.value });
+        mode = (m.shares[project] ||= {})[user] = sel.value;
+        sel.classList.remove("ask"); line.querySelector(".ask-hint")?.remove();
+        toast(`Saved: ${user} ${SHARE_WORDS[mode]} on ${m.label} (${project})`);
+      } catch (e) { sel.value = mode; showError(e); }
+    };
+    line.append(sel);
+    if (ask && !mode) line.append(el("span", "ask-hint", "share your chats here?"));
+    box.append(line);
+  }
+  return box;
+}
+
+function memberRow(p, user, access, source) {
+  const li = el("li", "member");
+  li.append(el("span", "mono member-name", user));
+  const acc = el("span", "member-access");
+  if (access === "admin") acc.append(el("span", "muted", "admin"));
+  else {
+    const s = el("select", "small"); s.setAttribute("aria-label", `${user}: access to ${p.name}`);
+    for (const m of ["read", "write"]) s.append(new Option(m, m));
+    s.value = access;
+    s.onchange = () => run(() => api("/ui/api/project/member", { project: p.name, user, mode: s.value }), s, `Saved: ${user} ${s.value} on ${p.name}`);
+    const x = el("button", "btn small quiet", "Remove"); x.setAttribute("aria-label", `Remove ${user} from ${p.name}`);
+    x.onclick = () => confirm(`Take away ${user}'s access to ${p.name}? Their agents lose it at once, and pc shares for it stop.`)
+      && run(() => api("/ui/api/project/member", { project: p.name, user, mode: "" }), x, `Removed: ${user} from ${p.name}`);
+    if (source === "creator") s.disabled = true, x.hidden = true, s.title = "made this project: keeps write";
+    acc.append(s, x);
+  }
+  li.append(acc, el("span", "muted member-source", source), pcShares(user, p.name));
+  return li;
+}
+
+function memberCard(p) {
+  const members = (state.members || {})[p.name] || [];
+  const admins = state.admin ? state.admins.filter((a) => (state.pcs || []).some((m) => m.projects.includes(p.name) && m.owner !== a)) : [];
+  const d = el("details", "members-card");
+  d.open = openCards.has(p.name) || (justAdded && justAdded.project === p.name);
+  d.ontoggle = () => (d.open ? openCards.add(p.name) : openCards.delete(p.name));
+  const sum = el("summary");
+  const pcs = (state.pcs || []).filter((m) => m.projects.includes(p.name)).map((m) => m.label);
+  sum.append(el("b", null, p.label || p.name), el("span", "muted", ` · ${members.length} ${members.length === 1 ? "member" : "members"}`
+    + (pcs.length ? ` · on ${pcs.join(", ")}` : "")));
+  const ul = el("ul", "member-rows");
+  ul.append(...admins.map((a) => memberRow(p, a, "admin", "admin: every project")), ...members.map((m) => memberRow(p, m.user, m.mode, m.source)));
+  if (!ul.children.length) ul.append(el("li", "muted", "No members yet: admins see every project."));
+  const f = el("form", "admin-form inline member-add"), input = el("input"), mode = el("select"), add = el("button", "btn small", "Add member");
+  input.required = true; input.pattern = "[\\w.@+\\-]{1,150}"; input.placeholder = "username"; input.setAttribute("aria-label", `Add a member to ${p.name}`);
+  if (state.admin) { input.setAttribute("list", "known-people"); }
+  for (const m of ["read", "write"]) mode.append(new Option(m, m));
+  mode.setAttribute("aria-label", "access");
+  add.type = "submit";
+  f.onsubmit = (e) => {
+    e.preventDefault();
+    const user = input.value.trim();
+    run(() => api("/ui/api/project/member", { project: p.name, user, mode: mode.value }).then(() => { justAdded = { project: p.name, user }; }), add, `Added: ${user} (${mode.value}) to ${p.name}`);
+  };
+  f.append(input, mode, add);
+  d.append(sum, ul, f);
+  return d;
+}
+
+function renderMembers(target, projects) {
+  $(target).replaceChildren(...projects.map(memberCard));
+  if (!$("known-people")) document.body.append(Object.assign(el("datalist"), { id: "known-people" }));
+  $("known-people").replaceChildren(...Object.keys(state.users || {}).map((u) => new Option(u)));
+  document.querySelector(".pc-shares select.ask")?.focus();
+  justAdded = null;
+}
+
+// Everyone who signs in: who waits for access (on top), the projects each has, and person-wide actions.
 function renderUsers() {
-  const projects = state.projects.map((p) => p.name);
-  const head = el("tr"); head.append(el("th", "", "Person"), ...projects.map((p) => el("th", "", p)), el("th", "", "Actions"));
+  const count = (p) => ((state.members || {})[p.name] || []).length;
+  renderMembers("members", state.projects.slice().sort((a, b) => count(b) - count(a)));
+  const head = el("tr"); head.append(el("th", "", "Person"), el("th", "", "Projects"), el("th", "", "Actions"));
   $("users-head").replaceChildren(head);
-  const rows = state.admins.map((a) => {
-    const tr = el("tr"); tr.append(el("td", "mono", a), ...projects.map(() => el("td", "muted", "admin")), el("td", "muted", "server config"));
-    return tr;
-  });
-  // People who signed in without access first: they are waiting for an answer.
+  const rows = state.admins.map((a) => { const tr = el("tr"); tr.append(el("td", "mono", a), el("td", "muted", "admin: every project"), el("td", "muted", "server config")); return tr; });
   const entries = Object.entries(state.users).sort(([a, ua], [b, ub]) =>
     (Object.keys(ua.projects || {}).length > 0) - (Object.keys(ub.projects || {}).length > 0) || a.localeCompare(b));
   for (const [name, u] of entries) {
-    const tr = el("tr");
-    if (!Object.keys(u.projects || {}).length) tr.className = "pending";
+    const tr = el("tr"), projects = Object.entries(u.projects || {});
     const who = el("td", "mono", name);
     if (u.first_seen) who.title = `first signed in ${stamp(new Date(u.first_seen * 1000))}`;
-    tr.append(who);
-    const selects = projects.map((p) => {
-      const s = el("select"); s.setAttribute("aria-label", `${name}: ${p}`);
-      for (const m of ["none", "read", "write"]) { const o = el("option", "", m); o.value = m; s.append(o); }
-      s.value = (u.projects || {})[p] || "none";
-      const td = el("td"); td.append(s); tr.append(td);
-      return [p, s];
-    });
-    // Saved shortly after the last change, without rebuilding the table: arrow keys on a closed select fire a change
-    // per step, and a rebuild would drop the focus. On an error the table reloads, so it shows what is stored.
-    for (const [, s] of selects) {
-      s.onchange = () => {
-        clearTimeout(s.saveTimer);
-        s.saveTimer = setTimeout(async () => {
-          showError(null);
-          try {
-            await api("/ui/api/admin/user", { username: name, projects: Object.fromEntries(selects.map(([p, x]) => [p, x.value])) });
-            tr.classList.toggle("pending", selects.every(([, x]) => x.value === "none"));
-            toast(`Saved: access of ${name}`);
-          } catch (e) { showError(e); load().catch(showError); }
-        }, 700);
-      };
+    const what = el("td");
+    if (projects.length) what.textContent = projects.map(([p, m]) => `${p} (${m})`).join(", ");
+    else { // asks for access: give one project here, the rest on its card
+      tr.className = "pending";
+      const s = el("select", "small"); s.setAttribute("aria-label", `Give ${name} read access to`);
+      s.append(new Option("Give read access to…", ""), ...state.projects.map((p) => new Option(p.label || p.name, p.name)));
+      s.onchange = () => s.value && run(() => api("/ui/api/project/member", { project: s.value, user: name, mode: "read" }).then(() => { justAdded = { project: s.value, user: name }; }), s, `Added: ${name} (read) to ${s.value}`);
+      what.append(el("span", "muted", "asks for access "), s);
     }
     const td = el("td", "actions");
-    if (state.admin) {
-      const imp = el("button", "btn small quiet", "View as");
-      imp.setAttribute("aria-label", `View as ${name}`);
-      imp.title = `View the knowledge server as ${name}`;
-      imp.onclick = async () => {
-        try {
-          await api("/ui/api/admin/impersonate", { user: name });
-          location.href = "/ui";
-        } catch (e) { showError(e); }
-      };
-      td.append(imp);
-    }
+    const imp = el("button", "btn small quiet", "View as");
+    imp.setAttribute("aria-label", `View as ${name}`); imp.title = `View the knowledge server as ${name}`;
+    imp.onclick = async () => { try { await api("/ui/api/admin/impersonate", { user: name }); location.href = "/ui"; } catch (e) { showError(e); } };
     const del = el("button", "btn small danger", "Remove");
     del.setAttribute("aria-label", `Remove ${name}`);
     del.onclick = () => confirm(`Remove ${name}? They lose access right away.`) && run(() => api("/ui/api/admin/user", { username: name, delete: true }), del);
-    td.append(del); tr.append(td);
-    rows.push(tr);
+    td.append(imp, del);
+    tr.append(who, what, td); rows.push(tr);
   }
   $("users").replaceChildren(...rows);
 }
@@ -495,6 +566,9 @@ async function load() {
     $("limits-tokens").textContent = `You may hold ${l.tokens} tokens, for the projects you have access to. Revoke one you no longer use.`;
     $("limits-projects").textContent = `You may create ${l.projects} projects (${l.created} made so far), up to ${l.project_mb} MB each. The admin is told about every new project and token.`;
     renderTokens(); renderProjects();
+    const own = state.projects.filter((p) => p.mine);
+    $("my-members-box").hidden = !own.length;
+    renderMembers("my-members", own);
     $("n-tokens").textContent = state.tokens.length; $("n-projects").textContent = state.projects.length;
     return;
   }
@@ -504,7 +578,7 @@ async function load() {
   if (!loaded) { loaded = true; applyKind(); } // later reloads keep what is being filled in
   $("n-tokens").textContent = state.tokens.length; $("n-projects").textContent = state.projects.length;
   const users = Object.values(state.users), waiting = users.filter((u) => !Object.keys(u.projects || {}).length).length; // asks for access
-  $("n-people").textContent = waiting ? `${waiting} new` : $("users").rows.length; // config admins are rows too
+  $("n-people").textContent = waiting ? `${waiting} new` : $("users").rows.length; // everyone who signs in, admins too
   $("n-people").classList.toggle("alert", !!waiting);
   if (!$("settings-form").contains(document.activeElement)) renderSettings(); // don't overwrite what is being typed
   if (!$("models-box").contains(document.activeElement)) renderModels();

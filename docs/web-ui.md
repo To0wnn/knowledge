@@ -37,6 +37,15 @@ Moved from the README; [back to the README](../README.md).
   sticky tab bar (arrow keys move through it; on a phone it scrolls sideways), its hash in the URL (`/ui/admin#tokens`,
   `#settings`); System's parts (background jobs, index, config, audit log, searches without hits, lessons) fold, each
   with its count, and have a hash of their own (`#gaps`, `#audit`, …) that opens System there. Light or dark, your pick.
+  **People** has a card per project (folded; the ones with most members first): a row per member with their access
+  (read or write; the maker's stays write), why they have it (`creator`, `invited by <who>`, `admin` for grants from before
+  invites were recorded) and, per pc with that project linked, what it shares with them (a select on your own pcs, text on
+  someone else's: only a pc's owner shares it); Add member under each card, after which the new row asks whether to share
+  your pcs. Below it, Everyone: who waits for access (with "Give read access to…"), each person's projects, View as and
+  Remove. The maker of a project (not an admin) gets the same card under Projects, Members of your projects: they add
+  people who already sign in here by typing their username (no list of names), read or write, and the admin hears of it
+  (`POST /ui/api/project/member {project, user, mode}`; `users.json` keeps `invited: {project: who}`). An invitee's tokens
+  that reached all their projects reach the new one too, as the maker's do when they create a project.
 - **Empty, loading and error states:** every view says in one muted line what it is for and the next step (with a
   button where there is one), "Loading…" while it loads and, when its API call fails, the message with Retry. Health
   with no findings says "All clear". A person with no pc online with a companion gets a Get started card in the

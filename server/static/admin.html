@@ -102,7 +102,12 @@
 
   <section id="sec-people" role="tabpanel" aria-labelledby="h-users" hidden>
     <h2 id="h-users">People</h2>
-    <p class="muted">People sign in through the reverse proxy (forward auth) or with the server password; here you decide which projects someone may read or edit. A change is saved shortly after you pick it. Someone who signs in without access appears at the top. Admins: the ones in the server config plus the extra admins under Settings.</p>
+    <p class="muted">Per project: who may read or edit it, why (admin, its maker, or who invited them), and what each pc with
+      that project linked shares with them. Access alone shows no chats: those run on a pc, and only its owner shares
+      them (your own pcs: pick it on the row; someone else's: they do, under Machines › Share…). A change is saved at once.</p>
+    <div id="members" class="members"></div>
+    <h3>Everyone</h3>
+    <p class="muted">People sign in through the reverse proxy (forward auth) or with the server password. Someone who signs in without access appears at the top. Admins: the ones in the server config plus the extra admins under Settings.</p>
     <div class="table-wrap"><table>
       <thead id="users-head"></thead>
       <tbody id="users"><tr><td class="empty loading" colspan="3">Loading…</td></tr></tbody>
@@ -122,6 +127,12 @@
       <thead><tr><th>Project</th><th>Docs root</th><th>Memory root</th><th>Files</th><th>Size</th><th>Access</th><th title="Whose new task lines may start without approval">Task writers</th><th>Where</th></tr></thead>
       <tbody id="project-rows"><tr><td class="empty loading" colspan="8">Loading…</td></tr></tbody>
     </table></div>
+    <div id="my-members-box" hidden>
+      <h3>Members of your projects</h3>
+      <p class="muted">Add someone who already signs in here (type their username; the admin adds new people). Access shows
+        them the project's memos and docs, not your chats: share those per pc on the same row.</p>
+      <div id="my-members" class="members"></div>
+    </div>
     <form id="project-form" class="admin-form inline">
       <label for="p-name">New project</label>
       <input id="p-name" required pattern="[a-z][a-z0-9]{1,23}" placeholder="lowercase, e.g. garden">
