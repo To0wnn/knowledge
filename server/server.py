@@ -3158,11 +3158,13 @@ REMOTE_OFF = "remote control is off for this pc's token"
 
 # A pc shared per project with other members of that project, by its owner only (Tailscale-style consent): "view" shows
 # them the pc's chats in that project, "use" also lets them start chats there and go on in their own, every tool call
-# asked (never YOLO); "yolo" is use with the pc's own YOLO switch, as the owner's chats run. A guest's chat stops at the
-# next poll once the share or membership goes.
-SHARES_FILE = ADMIN_DIR / "machine_shares.json"  # {machine: {"by": owner, "projects": {project: {person: "view" | "use" | "yolo"}}}}
-SHARE_MODES = ("view", "use", "yolo")
-USES = ("use", "yolo")  # the modes that start chats
+# asked (never YOLO); "yolo" is use with the pc's own YOLO switch, as the owner's chats run; "admin" is "yolo" plus the
+# pc's admin rights when its owner switched them on (a guest without it starts without them, but runs as the owner and
+# can still reach them; docs/companion.md). A guest's chat stops at the next poll once the share or membership goes.
+SHARES_FILE = ADMIN_DIR / "machine_shares.json"  # {machine: {"by": owner, "projects": {project: {person: "view" | "use" | "yolo" | "admin"}}}}
+SHARE_MODES = ("view", "use", "yolo", "admin")
+USES = ("use", "yolo", "admin")  # the modes that start chats
+YOLOS = ("yolo", "admin")  # the modes that run with the pc's YOLO switch
 
 
 def share_mode(mid: str, project: str, user: str) -> str:
@@ -3276,7 +3278,7 @@ def machine_rows() -> list[dict]:
                      "mine": any(own_token(tokens[n], dev, steer=False) for n in names), "shared": shared,
                      # its token allows remote control: what an admin may do there (link, unlink, update the plugin)
                      "remote": any(agents_on(tokens[n]) for n in names),
-                     "companion": {**{k: comp.get(k) for k in ("version", "self", "at", "workersAllowed", "game", "stats", "maxAgents", "folders", "projects", "token", "live", "chats", "chatReviews", "asks", "tools", "guests")},
+                     "companion": {**{k: comp.get(k) for k in ("version", "self", "at", "workersAllowed", "game", "stats", "maxAgents", "folders", "projects", "token", "live", "chats", "chatReviews", "asks", "tools", "guests", "admin")},
                                    "agents": sorted(comp.get("agents") or {}),
                                    "models": {a: v.get("models", []) for a, v in (comp.get("agents") or {}).items()},
                                    "current": {a: v.get("current", {}) for a, v in (comp.get("agents") or {}).items()}} if comp else None,
@@ -6024,8 +6026,8 @@ async def ui_history(request: Request):
 
 @server.custom_route("/ui/api/semantic", methods=["GET"])
 async def ui_semantic(request: Request):
-    project = canon(request.query_params.get("project", ""))
-    roots = tuple(r + "/" for r in PROJECTS[project] + ("claude",)) if project in PROJECTS else ()
+    roots = ui_pick_roots(request.query_params.get("project", ""))
+    roots = tuple(r + "/" for r in roots + ("claude",)) if roots else ()
     q = request.query_params.get("q", "").strip()[:500]
     hits = [h for h in await asyncio.to_thread(vec.search, q, roots, 30) if in_scope(h["path"])][:15] if q else []
     # the UI asks this after the exact search, for every pause in typing: a query that found nothing either way is a
@@ -6244,13 +6246,19 @@ def audit_stamp() -> tuple:
         return 0, 0
 
 
+def ui_pick_roots(want: str) -> tuple:
+    """The roots of the web UI's project pick: one project, "all", or several as "a,b" ("," is none)."""
+    names = list(PROJECTS) if want == "all" else [canon(p) for p in want.split(",") if p]
+    return tuple(r for p in names if p in PROJECTS for r in PROJECTS[p])
+
+
 @server.custom_route("/ui/api/recent", methods=["GET"])
 async def ui_recent(request: Request):
     """Newest changed Markdown files of a project: the device when the change came through this server (otherwise
     it was edited natively on the VM), lines added/removed, and the session that changed it (the session log entry
     written after the change that names the file), so you see who changed what and why."""
     want = request.query_params.get("project", "homelab")
-    roots = tuple(r for pr in PROJECTS.values() for r in pr) if want == "all" else PROJECTS.get(want, PROJECTS["homelab"])
+    roots = ui_pick_roots(want) or (() if "," in want else PROJECTS["homelab"])
     key = (roots, tuple(device.get().get("roots") or ()))
     async with _ui_recent_lock:  # tabs asking at once wait for one run instead of each making their own
         stamp = (index.note_gen, *audit_stamp())  # a session log entry counts too, and that is no note change
@@ -6331,8 +6339,8 @@ def search_notes(q: str, roots: tuple, limit: int = 40) -> list[dict]:
 async def ui_search(request: Request):
     q = request.query_params.get("q", "").strip()[:200]
     _ui_gap_last.pop(device.get().get("name", "?"), None)  # typing on: the earlier query was not where they stopped
-    project = request.query_params.get("project", "")
-    roots = PROJECTS[project] + ("claude",) if project in PROJECTS else ()
+    roots = ui_pick_roots(request.query_params.get("project", ""))
+    roots = roots + ("claude",) if roots else ()
     return JSONResponse({"notes": await asyncio.to_thread(search_notes, q, roots) if q else []})
 
 
@@ -6506,7 +6514,7 @@ async def ui_machine_share(request: Request, body: dict):
         return JSONResponse({"projects": await asyncio.to_thread(share_candidates, row, me)})
     project, user, mode = str(b.get("project", "")), str(b.get("user", "")), str(b.get("mode") or "")
     if mode and mode not in SHARE_MODES:
-        raise ValueError("mode is view, use, yolo or empty")
+        raise ValueError("mode is view, use, yolo, admin or empty")
     cands = {c["project"]: {m["user"] for m in c["members"]} for c in await asyncio.to_thread(share_candidates, row, me)}
     if mode and user not in cands.get(project, set()):
         raise ValueError(f"{user or 'that person'} is not another member of {project or 'that project'} linked on this pc")
@@ -6572,6 +6580,10 @@ def action_args(action: str, args: dict) -> dict:
         if args.get("project") not in PROJECTS or not in_scope(PROJECTS[args["project"]][1] + "/"):
             raise ValueError("unknown project")
         return {"path": path, "project": args["project"], **({"chosen": True} if args.get("chosen") is True else {})}
+    if action == "admin":  # the pc's own approval (UAC, password) is the real gate; the typed word keeps it from a misclick
+        if args.get("on") is True and args.get("confirm") != "ADMIN":
+            raise ValueError("Admin on needs the word ADMIN typed in the confirm dialog")
+        return {"on": args.get("on") is True}
     if action == "yolo":
         if args.get("on") is True and args.get("confirm") != "YOLO":
             raise ValueError("YOLO on needs the word YOLO typed in the confirm dialog")
@@ -7474,7 +7486,7 @@ async def ui_chats(request: Request):
          **({"worktree": True} if b.get("worktree") is True or guest else {}), **({"guest": True} if guest else {})}
     if guest:
         chat_add(c, "info", f"A chat on {row['label']}, shared with you for {project}: its owner sees it, "
-                            + ("it runs with that pc's YOLO setting" if row["shared"][project] == "yolo" else "every tool call asks first (never YOLO)")
+                            + ("it runs with that pc's YOLO setting" if row["shared"][project] in YOLOS else "every tool call asks first (never YOLO)")
                             + ", and it runs on the owner's agent subscription.")
     why_own = await asyncio.to_thread(checkout_in_use, comp, d, folder, now) if "worktree" not in b and not guest else ""
     if why_own:  # nobody chose: a second writer in one checkout takes the other's half work along in its commits
@@ -8227,7 +8239,7 @@ async def ui_chat_join(request: Request):
         chat_add(c, "info", f"{me} joined this chat: you both steer it now; each message names its writer.")
     await asyncio.to_thread(update_state, f, change)
     # its agent restarts under the stricter settings; a YOLO turn running now stops when the guest may not have YOLO
-    stop = mode != "yolo" and agent_yolo and c.get("status") in ("queued", "running")
+    stop = mode not in YOLOS and agent_yolo and c.get("status") in ("queued", "running")
     await asyncio.to_thread(update_state, f.parent / "queue.json", lambda q: q.setdefault(c["id"], {}).update(end_once=True, **({"stop": True} if stop else {})))
     audit("chat-join", f"{row['id']} {c['id']} {me}")
     if (by := (read_json(SHARES_FILE, {}).get(row["id"]) or {}).get("by", "")) in ADMINS:
@@ -8683,10 +8695,11 @@ async def machine_chats(request: Request):
             if joined != (c.get("joined") or []):  # someone's share ended: they leave the chat (after the lock)
                 pruned.append((cid, joined))
             people = ([c.get("by", "")] if c.get("guest") else []) + joined
-            yolo_all = all(share_mode(mid, c.get("project") or "", u) == "yolo" for u in people)
+            modes = [share_mode(mid, c.get("project") or "", u) for u in people]
+            yolo_all, admin_all = all(x in YOLOS for x in modes), all(x == "admin" for x in modes)
             # a chat a guest runs or joined: without YOLO unless every guest in it has "yolo"; a taken or joined one goes
             # on in the folder it ran in
-            extra_guest = ({"guest": True, **({"guest_yolo": True} if yolo_all else {}),
+            extra_guest = ({"guest": True, **({"guest_yolo": True} if yolo_all else {}), **({"guest_admin": True} if admin_all else {}),
                             **({"taken": True} if c.get("taken") or joined else {})} if people else {})
             rdr = (all_prefs.get(c.get("by", "") or "", {}).get("chat_reader") or {}).get("id") or ""
             extra = {**({"reader": rdr} if rdr else {}), **extra_guest}
@@ -9285,6 +9298,9 @@ async def machine_report(request: Request):
                   # runs a guest's chat without YOLO (a pc shared per project); 2: also one taken over from the owner
                   "guests": 2 if b.get("guests") == 2 and b.get("guests") is not True else b.get("guests") is True,
                   "maxAgents": int(b["maxAgents"]) if isinstance(b.get("maxAgents"), int) else None,  # None: a companion before the setting
+                  # admin rights for its chats (admin.py): on, being asked at the pc, how the last ask ended
+                  "admin": {"on": a.get("on") is True, "asking": a.get("asking") is True, "last": str(a.get("last") or "")[:300]}
+                           if isinstance(a := b.get("admin"), dict) else None,
                   "game": str(b.get("game") or "")[:80],
                   "stats": report_stats(b.get("stats")),
                   "agents": {a: {"yolo": v.get("yolo") is True, "trusted": v.get("trusted") if isinstance(v.get("trusted"), bool) else None,

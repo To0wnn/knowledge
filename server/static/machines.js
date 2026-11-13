@@ -83,7 +83,7 @@ const ACTION_WORDS = {
   update_plugin: () => "Update Knowledge", update_agents: () => "Update agents", apply_models: () => "Apply models",
   workers_allowed: (a) => (a.on ? "Allow workers" : "Turn workers off"),
   max_agents: (a) => (a.n ? `At most ${a.n} agents at once` : "No limit on agents at once"),
-  yolo: (a) => `YOLO ${a.on ? "on" : "off"} for ${AGENT_NAME[a.agent] || a.agent}`, trust_hooks: (a) => `Trust the hooks of ${AGENT_NAME[a.agent] || a.agent}`,
+  yolo: (a) => `YOLO ${a.on ? "on" : "off"} for ${AGENT_NAME[a.agent] || a.agent}`, admin: (a) => `Admin rights ${a.on ? "on" : "off"}`, trust_hooks: (a) => `Trust the hooks of ${AGENT_NAME[a.agent] || a.agent}`,
   link_folder: (a) => `Link ${a.path} to ${shown(a.project)}`, unlink_folder: (a) => `Unlink ${a.path}`,
   install_tool: (a) => `Install ${a.tool}`, remove_tool: (a) => `Remove ${a.tool}`, tool_auto: (a) => `Daily update of ${a.tool} ${a.on ? "on" : "off"}`,
   start_worker: (a) => `Start a worker for ${a.id}`, stop_worker: (a) => `Stop the worker of ${a.id}`, restart: (a) => `Restart the worker of ${a.id}`,
@@ -346,6 +346,7 @@ function pcHead(m, here) {
     if (on && !confirm(`${WORKERS_WARNING}\n\n${m.label}`)) return false;
     machineAction(m, "workers_allowed", { on }); return true;
   }) : val(c.workersAllowed ? "Runs workers" : "Runs no workers", "mx-pc-meta"));
+  if (c?.admin) box.append(adminLine(m, c.admin));
   if (c?.maxAgents != null) { // chat turns and workers at once, all agents together (a companion before the setting reports none)
     const line = el("div", "mx-pc-meta");
     line.title = "Chats and workers running at once on this pc, all agents together";
@@ -354,6 +355,21 @@ function pcHead(m, here) {
     box.append(line);
   }
   return box;
+}
+// Admin rights for the pc's chats: asked once at the pc itself (UAC, the sudo or admin password), kept until switched off.
+const ADMIN_WARNING = "Admin rights for this pc's chats: their agents can then install software, change services and system settings. "
+  + "You approve it once on the pc itself (Windows: the UAC prompt; Linux: the sudo password; Mac: the admin password); nobody approving within 2 minutes leaves it off. "
+  + "While on, every program you run there can become administrator too, not only the agents. A guest's chat starts as administrator only when shared with \"YOLO and admin\", but it runs as you: one that can run commands can still reach it while this is on.";
+function adminLine(m, a) {
+  const line = el("div", "mx-pc-meta");
+  const words = a.asking ? "Admin: approve on the pc" : a.on ? "Admin rights on" : "Admin rights off";
+  if (steers(m)) line.append(machineSwitch(words, a.on, a.asking || pendingAction(m, "admin"), `Admin rights on ${m.label}`, (on) => {
+    if (on && prompt(`${ADMIN_WARNING}\n\nType ADMIN to ask for it on ${m.label}.`) !== "ADMIN") return false;
+    machineAction(m, "admin", on ? { on: true, confirm: "ADMIN" } : { on: false }); return true;
+  }));
+  else line.append(val(words));
+  if (a.last && !a.on) line.append(" ", el("small", "muted", a.last.startsWith("terminal: ") ? `Run in a terminal on that pc: ${a.last.slice(10)}` : `Last ask: ${a.last}`));
+  return line;
 }
 // The rarer actions on a pc, behind a More button: update its agents, what was asked of it, forget it.
 function pcMore(m) {
@@ -374,13 +390,14 @@ async function forgetPc(m) {
 }
 // Share this pc per project with its other members: View shows them its chats in that project, Use also lets them start
 // chats there (never YOLO, every tool call asks them, on your agent subscription). Off takes it back at once.
-const SHARE_WORDS = { "": "Off", view: "View chats", use: "View and use", yolo: "Use with YOLO" };
-const usesShare = (x) => x === "use" || x === "yolo";
+const SHARE_WORDS = { "": "Off", view: "View chats", use: "View and use", yolo: "Use with YOLO", admin: "YOLO and admin" };
+const usesShare = (x) => x === "use" || x === "yolo" || x === "admin";
 async function pcShare(m) {
   const d = el("dialog", "mx-dialog"), h = el("h3", null, `Share ${m.label}`), body = el("div");
   const close = el("button", "btn", "Close"); close.type = "button"; close.onclick = () => d.close();
   d.append(h, el("p", "muted", "Per project linked on this pc, with the project's other members. View: they see this pc's chats in that project. "
     + "Use: they can also start chats here in that project; each tool call asks them first. Use with YOLO: their chats follow this pc's YOLO switch, as yours do. "
+    + "YOLO and admin: also this pc's admin rights when you switched them on (on a Mac every chat of yours there can use sudo anyway). "
     + "Their chats run as you on this pc, on your agent subscription, in a worktree of their own; you see those chats and can stop them. Off takes it back at once."), body, close);
   d.onclose = () => { d.remove(); loadMachines(); };
   document.body.append(d); d.showModal();
@@ -398,6 +415,7 @@ async function pcShare(m) {
       sel.value = u.mode || "";
       sel.onchange = async () => {
         if (sel.value === "use" && !confirm(`Let ${u.user} run agents on ${m.label} in ${shown(p.project)}?\n\nTheir agents run as you on this pc (files, network, your agent subscription). Every tool call asks them first, and they answer it themselves: give this only to someone you would give a shell.`)) { sel.value = u.mode || ""; return; }
+        if (sel.value === "admin" && prompt(`${u.user}'s chats on ${m.label} (${shown(p.project)}) then run with YOLO and, when this pc's admin rights are on, as administrator: they can change anything on this pc. Type ADMIN to allow it.`) !== "ADMIN") { sel.value = u.mode || ""; return; }
         if (sel.value === "yolo" && prompt(`${u.user}'s chats on ${m.label} (${shown(p.project)}) then run with this pc's YOLO switch: no tool call asked, as you on this pc, on your agent subscription; risky actions are flagged, never stopped. Type YOLO to allow it.`) !== "YOLO") { sel.value = u.mode || ""; return; }
         try {
           await api("/ui/api/machine/share", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ machine: m.id, project: p.project, user: u.user, mode: sel.value }) });
@@ -783,12 +801,12 @@ function filesFail(m, e) {
 
 // The start: the linked folders, grouped by pc.
 function filesRoots() {
-  const usable = (m, f) => m.own || ["use", "yolo"].includes(m.shared?.[f.project]); // a pc shared with you: that project's folders
+  const usable = (m, f) => m.own || ["use", "yolo", "admin"].includes(m.shared?.[f.project]); // a pc shared with you: that project's folders
   const pcs = (machinesRes?.machines || []).filter((m) => m.online && !m.old && m.companion && (steers(m) || m.shared))
     .sort((a, b) => (b.id === machinesHere) - (a.id === machinesHere) || b.own - a.own || a.label.localeCompare(b.label));
   const parts = [el("p", "muted fm-lede", "The folders linked on your pcs, and those of a project someone shared with you on theirs. git's own files, .env files and keys stay hidden.")];
   for (const m of pcs) {
-    const folders = (m.companion.folders?.linked || []).filter((f) => usable(m, f) && (allMode() || f.project === project));
+    const folders = (m.companion.folders?.linked || []).filter((f) => usable(m, f) && picked(f.project));
     if (!folders.length) continue;
     const sec = el("section", "fm-group"), h = el("h2", "mx-h", m.label);
     if (m.id === machinesHere) h.append(el("span", "chip", "this pc"));

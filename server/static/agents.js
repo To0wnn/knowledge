@@ -12,7 +12,7 @@ const ckKey = (c) => `${c.machine}/${c.id}`;
 const ckBusy = (s) => s === "running" || s === "queued";
 const FORCE_BUSY = "This chat is working: force archive stops its turn, drops its queued messages and skips the wrap-up. Go on?";
 const ckShort = (path) => (path || "").split(/[\\/]/).filter(Boolean).pop() || path;
-const ckScope = (x) => !agentProject || x.project === agentProject; // the header's project filter
+const ckScope = (x) => (agentProject ? x.project === agentProject : picked(x.project)); // the header's project filter
 
 // Polling of the pcs, chats and board runs while an Agents view shows; the router turns it on and off.
 function ckRun(on) { clearTimeout(ck.timer); if (on) { ck.summaryAt = 0; ckTick(); } }
@@ -38,7 +38,7 @@ async function ckSummary() {
   const [ms, cs, bd] = await Promise.all([api("/ui/api/machines"), api("/ui/api/chats"), api("/ui/api/board").catch(() => null)]);
   ck.machines = ms.machines.filter((m) => m.own && !m.old); ck.ready = true; ck.error = "";
   // someone else's pcs shared with you for a project to "use": new chats there too (Machines: Share, on the owner's side)
-  ck.shared = ms.machines.filter((m) => !m.own && !m.old && Object.values(m.shared || {}).some((x) => x === "use" || x === "yolo"));
+  ck.shared = ms.machines.filter((m) => !m.own && !m.old && Object.values(m.shared || {}).some((x) => ["use", "yolo", "admin"].includes(x)));
   for (const m of ck.machines) for (const x of m.actions || []) { // a Merge queued from a card: say how it went on the pc
     const what = ck.waits.get(x.id);
     if (what && (x.status === "done" || x.status === "failed")) { ck.waits.delete(x.id); toast(`${what}: ${x.result || x.status}`, x.status === "failed"); }
@@ -132,7 +132,7 @@ function ckSubRows(c) { // a chat's subagents, each a chat of its own, under it:
 }
 const ckOnlinePc = () => ck.machines.some((m) => m.online && m.companion);
 const ckPc = (id) => ck.machines.find((m) => m.id === id) || (ck.shared || []).find((m) => m.id === id); // own, else shared with you
-const ckLinked = (m) => (m.companion?.folders?.linked || []).filter((f) => m.own || ["use", "yolo"].includes(m.shared?.[f.project]));
+const ckLinked = (m) => (m.companion?.folders?.linked || []).filter((f) => m.own || ["use", "yolo", "admin"].includes(m.shared?.[f.project]));
 // Getting started, instead of an empty list: the help page's install line for this pc's system (help.html#install),
 // then linking a folder and the first chat.
 const INSTALL_CMD = {
@@ -1355,11 +1355,11 @@ document.addEventListener("keydown", (e) => { if (e.key === "Escape" && !documen
 const CK_DRAFT = { machine: "draft", id: "new", draft: true, agent: "", title: "", folder: "", label: "", status: "idle" };
 function ckDraftPcs() { // own and shared pcs online with a companion that reports models and has a linked folder in the project
   return [...ck.machines, ...(ck.shared || [])].filter((m) => m.online && (m.companion?.agents || []).length
-    && ckLinked(m).some((f) => !agentProject || f.project === agentProject));
+    && ckLinked(m).some((f) => picked(f.project)));
 }
 function ckDraftFolders(card) { // [{machine, label, path, project}] that can run the chosen model
   const x = ckModelOf(card), pcs = ckDraftPcs().filter((m) => x ? x.pcs.includes(m.id) : (m.companion.agents || []).includes(card.pick?.agent));
-  return pcs.flatMap((m) => ckLinked(m).filter((f) => !agentProject || f.project === agentProject)
+  return pcs.flatMap((m) => ckLinked(m).filter((f) => picked(f.project))
     .map((f) => ({ machine: m.id, label: m.own ? m.label : `${m.label} (shared)`, path: f.path, project: f.project })));
 }
 function ckDraftFolder(card) {

@@ -47,6 +47,7 @@ from pathlib import Path
 HOOKS = Path(__file__).resolve().parent
 sys.path.insert(0, str(HOOKS))
 import model_settings  # noqa: E402  (next to this file)
+import admin as admin_rights  # noqa: E402  (admin rights for chats, switched on once per pc)
 import agent_hooks  # noqa: E402  (the wake code and the session registry)
 import awake  # noqa: E402  (no idle sleep while an agent works)
 import chat  # noqa: E402  (chats from the web UI)
@@ -837,6 +838,47 @@ def set_yolo(agent: str, on: bool) -> str:
     log("trust", f"YOLO {'on' if on else 'off'} for {AGENTS[agent][0]}",
         "Woken tasks run without asking" if on else "The previous settings are back")
     return "on" if on else "off"
+
+
+ADMIN_ASK = {"asking": 0.0, "last": ""}  # a running approval request (when it started) and how the last one ended
+
+
+def set_admin(on: bool) -> str:
+    """Admin rights for this pc's chats on (one approval at the pc, asked off this thread) or off (no prompt)."""
+    if not on:
+        got = admin_rights.off()
+        log("trust", "Admin rights off" if got.startswith("off") else "Admin rights could not be switched off", got)
+        if not got.startswith("off"):
+            raise RuntimeError(got)
+        return "off"
+    if admin_rights.status(fresh=True) and admin_rights.active():
+        return "on"
+    if time.time() - ADMIN_ASK["asking"] < admin_rights.ASK_WAIT + 5:
+        return "asking"
+
+    def ask():
+        try:
+            got = admin_rights.on()
+        except Exception as e:
+            got = f"failed: {type(e).__name__}: {e}"
+        ADMIN_ASK.update(asking=0.0, last=got)
+        log("trust" if got == "on" else "error", "Admin rights on: chats here can run admin commands" if got == "on"
+            else "Admin rights stay off", {"declined": "declined, or nobody answered in time (UAC says No by itself after ~2 minutes)", "timeout": "nobody approved in time"}.get(got, got))
+    ADMIN_ASK.update(asking=time.time(), last="")
+    threading.Thread(target=ask, daemon=True).start()
+    log("trust", "Admin rights asked", "Approve on this pc within 2 minutes (UAC, or the password dialog); otherwise it stays off")
+    return "asking"
+
+
+def admin_state() -> dict:
+    """For the pages: on, being asked, and how the last request ended ("terminal: <command>" on Linux without a desktop)."""
+    on = admin_rights.active()
+    if on and os.name == "nt":
+        with contextlib.suppress(OSError):
+            admin_rights.write_launcher()  # after a plugin update: the task's fixed action follows the new plugin folder
+    last = ADMIN_ASK["last"] or ("its task runs a Python that is gone or changed: turn admin on again (one UAC prompt)"
+                                 if not on and admin_rights.status() else "")
+    return {"on": on, "asking": bool(ADMIN_ASK["asking"]), **({"last": last} if last and not on else {})}
 
 
 def yolo_off() -> list:
@@ -1819,6 +1861,7 @@ def report(tok: str, ws: dict, lim: dict, wait: list, now: float, waiting=None, 
         write_json(STATE / "stats.json", samples, indent=None)  # kept on disk: the companion restarts with every plugin update
     body = {"stats": sysstats.summary(samples, now), "version": version(), "self": self_state(), "workersAllowed": s["workersAllowed"], "maxAgents": s["maxAgents"], "game": workers.game_session(),
             "live": list(chat.LIVE_AGENTS),  # agents whose chats run live: a message while they work goes in at once
+            "admin": admin_state(),
             "guests": 2,  # a guest's chat runs without YOLO (a pc shared per project); 2: also one taken over (in its own folder)
             "agents": {a: {"yolo": bool(yolo.get(a, {}).get("on")), "trusted": not untrusted(a, folders), "limit": lim.get(a),
                      "resets": (resets or {}).get(a), "windows": (windows or {}).get(a, []), **({"plugin": v} if (v := plugin_version(a)) else {}),  # known before a session
@@ -2120,6 +2163,8 @@ def run_action(a: dict) -> str:
                 else " runs from a plugin copy, which an update does not move: run the installer once" if me["from"] == "copy" else " is current"))
     if act == "yolo":
         return f"YOLO {set_yolo(agent, args.get('on') is True)}"
+    if act == "admin":
+        return {"on": "admin rights on", "off": "admin rights off", "asking": "admin rights asked: approve on the pc within 2 minutes"}[set_admin(args.get("on") is True)]
     if act == "workers_allowed":
         save_settings({"workersAllowed": args.get("on") is True})
         return f"workers {'allowed' if args.get('on') is True else 'off'}"
@@ -2298,7 +2343,7 @@ def live_loop():
         time.sleep(LIVE_EVERY)
 
 
-STATE_ACTIONS = {"install_tool", "remove_tool", "tool_auto", "yolo", "workers_allowed", "max_agents", "link_folder", "unlink_folder", "trust_hooks", "stop_worker", "restart", "merge", "takeover", "archive_worker", "apply_models"}
+STATE_ACTIONS = {"install_tool", "remove_tool", "tool_auto", "yolo", "admin", "workers_allowed", "max_agents", "link_folder", "unlink_folder", "trust_hooks", "stop_worker", "restart", "merge", "takeover", "archive_worker", "apply_models"}
 
 
 # ---------------------------------------------------------------- the page
@@ -2358,7 +2403,7 @@ def page_state() -> dict:
                        "stalled": len(lanes["stalled"]), "synced": st.get("synced"), "syncError": st.get("sync_error", "")},
             "agents": agents, "tasks": lanes, "activity": load("activity.json", [])[:50],
             "settings": {"serverUrl": token_store.url(), "token": {"present": bool(tok)}, **settings(), "game": workers.game_session()},
-            "folders": folder_links(), "projects": st.get("projects", []),
+            "folders": folder_links(), "projects": st.get("projects", []), "admin": admin_state(),
             "version": version()}
 
 
@@ -2691,6 +2736,12 @@ class Handler(BaseHTTPRequestHandler):
                 if body.get("on") and body.get("confirm") != "YOLO":  # as the web UI's remote action: typed, never one click
                     raise ValueError("YOLO on needs the word YOLO typed in the confirm dialog")
                 return self.send(200, {"yolo": set_yolo(agent, bool(body.get("on")))}, origin=o)
+            if path == "/local/api/admin":
+                if o != SELF:
+                    return self.send(403, {"error": "Admin rights can only be changed on the companion page itself"}, origin=o)
+                if body.get("on") and body.get("confirm") != "ADMIN":
+                    raise ValueError("Admin on needs the word ADMIN typed in the confirm dialog")
+                return self.send(200, {"admin": set_admin(bool(body.get("on")))}, origin=o)
             if path == "/local/api/settings":
                 if o != SELF:  # whether this pc runs workers is for this pc's own page (or its owner, remotely)
                     return self.send(403, {"error": "Worker settings can only be changed on the companion page itself"}, origin=o)
@@ -2887,6 +2938,8 @@ def chats_round() -> bool:
             save("chat_worktrees.json", dict(list({**wts, item["chat"]: item.get("folder")}.items())[-50:]))
         # a guest's chat (this pc shared with them by its owner) runs without YOLO, every tool call asked, unless the
         # owner shared it with YOLO (guest_yolo): then this pc's own switch counts
+        if admin_rights.active():  # admin on here: the owner's chats have it, a guest's only when shared with admin
+            item["admin"] = not item.get("guest") or item.get("guest_admin") is True
         chat.start(item, post, log, linked, (lambda agent: False) if item.get("guest") and not item.get("guest_yolo") else yolo, fetch)
     for d in r.get("diffs", []):  # after the turns (handed out once: never lost to a diff); read-only, linked folders and workers only
         try:
@@ -3814,19 +3867,25 @@ def main(argv: list):
         def fake_server(method, path, tok, body=None):
             if path == "/machine/chats":
                 return {"work": [{"chat": "c1", "agent": "codex", "folder": "/x"}, {"chat": "c2", "agent": "codex", "folder": "/x", "guest": True},
-                                 {"chat": "c3", "agent": "codex", "folder": "/x", "guest": True, "guest_yolo": True}],
+                                 {"chat": "c3", "agent": "codex", "folder": "/x", "guest": True, "guest_yolo": True},
+                                 {"chat": "c4", "agent": "codex", "folder": "/x", "guest": True, "guest_yolo": True, "guest_admin": True}],
                         "diffs": [{"id": "d1", "folder": "/not-linked"}]}
             raise OSError("server away")
         globals().update(server=fake_server, folder_links=lambda: {"linked": [{"path": "/x", "project": "p"}], "candidates": []})
-        chat.start = lambda item, post, log, linked, yolo, *a: started.append((item["chat"], yolo("codex")))
+        chat.start = lambda item, post, log, linked, yolo, *a: started.append((item["chat"], yolo("codex"), item.get("admin")))
         save("yolo.json", {"codex": {"on": True}})  # YOLO on for this pc's codex: a guest's chat still runs without it
+        real_status = admin_rights.active
         try:
+            chats_round()  # admin off here: no chat is told anything about it
+            assert [x[2] for x in started] == [None] * 4, started
+            started.clear()
+            admin_rights.active = lambda: True  # admin on: the owner's chats have it, a guest's only when shared with admin
             chats_round()
         finally:
             globals().update(server=real[0], folder_links=real[1])
-            chat.start = real[2]
+            chat.start, admin_rights.active = real[2], real_status
         save("yolo.json", {})
-        assert started == [("c1", True), ("c2", False), ("c3", True)], started
+        assert started == [("c1", True, True), ("c2", False, False), ("c3", True, False), ("c4", True, True)], started
         hook_status.ERRORS = Path(tmp_state) / "hook-errors.jsonl"  # a damaged state file says so, once; a missing one does not
         STATE.mkdir(parents=True, exist_ok=True); (STATE / "damaged.json").write_text("", encoding="utf-8")
         assert load("gone.json", {"d": 1}) == {"d": 1} and not hook_status.ERRORS.exists()

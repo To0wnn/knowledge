@@ -159,7 +159,7 @@ function paintTitle() {
 function paintHead() {
   const r = shellRoute; if (!r.view) return;
   const [, sec, title] = VIEWS[r.view];
-  $("crumb").textContent = sec === "Knowledge" ? `Knowledge · ${project === ALL ? "all projects" : shown(project)}` : sec;
+  $("crumb").textContent = sec === "Knowledge" ? `Knowledge · ${pickName()}` : sec;
   $("crumb").hidden = sec === title; // "Agents › Agents" says nothing twice
   $("title").textContent = title;
   paintTitle();
@@ -175,8 +175,7 @@ $("back").onclick = () => (shellRoute.view === "chats" && ck.view ? ckShow(null)
 
 // The Agents views follow the one project picker (sidebar, More sheet; "" = all projects); the Needs-you badge counts all.
 function setAgentProject(p) {
-  if (p === agentProject) return;
-  agentProject = p;
+  agentProject = p; // also when it stays "": another pick of several
   if (shellRoute.view !== "tasks") loadTasks(false).catch(() => {}); // its badge counts this project
   if (shellRoute.view === "chats") { ckList(); bdRender(); const d = ck.cards.get(ckKey(CK_DRAFT)); if (d) ckPoll(d); }
   else if (shellRoute.view === "tasks") {

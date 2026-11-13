@@ -216,7 +216,24 @@ function renderSettings() {
       h("label", { class: "cmp-switch" }, h("input", { type: "checkbox", name: "workersAllowed", checked: !!s.workersAllowed }), "Workers allowed on this pc"),
       h("label", { class: "cmp-switch" },
         h("input", { type: "number", name: "maxAgents", min: 0, required: true, value: s.maxAgents ?? 4, style: "width:4em" }), "at most this many agents at once, chats and workers together (0: no limit)")),
+    adminField(S.admin || {}),
     h("div", { class: "cmp-settings-foot" }, h("button", { class: "cmp-btn cmp-btn--primary", type: "submit" }, "Save settings")));
+}
+
+// Admin rights for this pc's chats (admin.py): asked once here, kept until switched off.
+const ADMIN_TEXT = "Chats on this pc can then run admin commands (install software, change services and system settings). "
+  + "You approve it once here: the UAC prompt (Windows), the sudo password (Linux) or the admin password (Mac); nobody approving within 2 minutes leaves it off. "
+  + "While on, every program you run here can become administrator, not only the agents. A guest's chat starts as administrator only when shared with \"YOLO and admin\", but it runs as you: one that can run commands can still reach it while this is on.";
+function adminField(a) {
+  const btn = h("button", { class: "cmp-btn", type: "button", disabled: !!a.asking }, a.on ? "Turn admin rights off" : a.asking ? "Approve the prompt on this pc…" : "Turn admin rights on…");
+  btn.addEventListener("click", () => {
+    if (a.on) return act("/local/api/admin", { on: false }, "Admin rights off");
+    if (prompt(`${ADMIN_TEXT}\n\nType ADMIN to ask for it.`) !== "ADMIN") return;
+    act("/local/api/admin", { on: true, confirm: "ADMIN" }, (r) => r.admin === "on" ? "Admin rights on" : "Approve the prompt on this pc within 2 minutes");
+  });
+  const last = a.last && !a.on ? (a.last.startsWith("terminal: ") ? `No desktop to ask on: run in a terminal: ${a.last.slice(10)}` : `Last ask: ${a.last}`) : "";
+  return h("fieldset", { class: "cmp-field" }, h("legend", {}, "Admin rights"), h("small", {}, ADMIN_TEXT),
+    state(!!a.on, "On: chats here can run admin commands", "Off"), last ? h("small", { class: "cmp-error" }, last) : null, btn);
 }
 
 async function act(path, body, done) {
