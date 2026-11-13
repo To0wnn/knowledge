@@ -345,6 +345,12 @@ def kill(w: dict, hard: bool = False):
     if not running(w):
         return
     pid = w["pid"]
+    if w.get("admin") and w.get("dir"):  # an elevated chat host (admin.py): this process may not stop it, it stops itself
+        (Path(w["dir"]) / "kill").touch()
+        for _ in range(100):
+            if not running(w):
+                return
+            time.sleep(0.1)
     if os.name == "nt":  # a detached console process has no window to close: only /F stops it
         r = subprocess.run(["taskkill", "/T", "/F", "/PID", str(pid)], capture_output=True, text=True, timeout=30)
         # 128: no such process (it ended meanwhile), in every Windows language. Other codes also come when one process

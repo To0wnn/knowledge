@@ -1115,7 +1115,8 @@ Categories=Network;Development;
 
 def companion_undo_steps(system: str) -> list:
     """YOLO off first: once the companion is gone nothing could switch the agents' settings back."""
-    p, off = companion_paths(system), [("run", [sys.executable, str(HOOKS / "companion.py"), "yolo-off"], False)]
+    p, off = companion_paths(system), [("run", [sys.executable, str(HOOKS / "companion.py"), "yolo-off"], False),
+                                       ("run", [sys.executable, str(HOOKS / "admin.py"), "off"], True)]  # its admin task or sudoers file goes too
     if system == "windows":
         return off + [("run", ["schtasks", "/End", "/TN", COMPANION_NAME], True),
                 ("run", ["schtasks", "/Delete", "/F", "/TN", COMPANION_NAME], True),
