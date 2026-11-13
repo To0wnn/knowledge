@@ -2178,13 +2178,15 @@ def run_action(a: dict) -> str:
             raise ValueError(f"no tool {tid} in this plugin version: update the plugin")
         set_tool(tid, auto=args.get("on") is True)
         return f"{tools.catalog()[tid]['name']}: daily update {'on' if args.get('on') is True else 'off'}"
+    if act in ("claude_login", "claude_cancel", "claude_code", "claude_token", "claude_key", "claude_budget", "claude_remove"):
+        accounts.may(str(args.get("account", "")), str(a.get("by") or ""), a.get("pc_owner") is True, act == "claude_remove")
     if act == "claude_login":  # the sign-in link goes to the page with the next report
         accounts.login(str(args.get("account", "")), by=str(a.get("by") or ""), setup=args.get("setup") is True)
         return f"{args.get('account')}: open the sign-in link under Machines, then paste the code there"
     if act == "claude_cancel":
         return accounts.cancel(str(args.get("account", "")))
     if act == "claude_code":
-        return accounts.code(str(args.get("account", "")), str(args.get("code", "")))
+        return accounts.code(str(args.get("account", "")), str(args.get("code", "")), by=str(a.get("by") or ""))
     if act == "claude_token":
         return accounts.set_secret(str(args.get("account", "")), "token", str(args.get("token", "")), by=str(a.get("by") or ""))
     if act == "claude_key":
