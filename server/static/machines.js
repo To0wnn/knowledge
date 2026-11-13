@@ -521,19 +521,55 @@ function accountsCell(m) {
     if (steer && mine && x.id !== main) acts.push(actionButton("Make main", () => accountMain(m, x.id), "btn small quiet"));
     const busy = pendingAction(m, "claude_login", (y) => y.account === x.id) || pendingAction(m, "claude_code", (y) => y.account === x.id);
     if (steer && mine && x.login) {
-      const a = el("a", "btn small", "Open sign-in"); a.href = x.login; a.target = "_blank"; a.rel = "noopener noreferrer";
+      const a = el("a", "btn small primary", "Open sign-in"); a.href = x.login; a.target = "_blank"; a.rel = "noopener noreferrer";
       a.title = "Sign in with the account in a new tab; claude.com then shows a code to paste here";
-      acts.push(a, machineButton("Paste code…", "The code the sign-in page showed", () => accountCode(m, x.id), busy));
-    } else if (steer && mine && x.id) {
-      acts.push(machineButton(x.kind ? "Change sign-in…" : "Sign in…", `Sign ${x.id} in: browser, long-lived token or API key`, () => accountAdd(m, x.id),
-        busy || pendingAction(m, "claude_token", (y) => y.account === x.id) || pendingAction(m, "claude_key", (y) => y.account === x.id)));
-    } else if (steer && x.id === "" && m.own) { // the pc's own: the companion stays online, so it signs in again from here
-      acts.push(machineButton(x.email || x.kind ? "Change sign-in…" : "Sign in…", "This pc's own Claude: browser sign-in, or a long-lived token or API key behind it",
-        () => accountAdd(m, ""), busy || pendingAction(m, "claude_token", (y) => y.account === "") || pendingAction(m, "claude_key", (y) => y.account === "")));
-      if (x.email) acts.push(machineButton("Sign out…", "Sign this pc's own Claude out", () => {
-        const word = prompt(`Sign ${m.label}'s own Claude out? Its terminal sessions, workers and chats on it stop until it signs in again (Sign in here). Type SIGN OUT to go on.`);
-        return word === "SIGN OUT" ? machineAction(m, "claude_logout", { account: "", confirm: word }) : null;
-      }, pendingAction(m, "claude_logout"), "btn small quiet"));
+
+      const inp = el("input"); inp.placeholder = "code or token"; inp.autocomplete = "off";
+      inp.className = "input small"; inp.style.minWidth = "170px"; inp.setAttribute("aria-label", "Code or token from sign-in");
+
+      const confirmBtn = machineButton("Confirm", "Save this code or token", () => {
+        const val = inp.value.trim();
+        if (!val) return;
+        if (/^sk-ant-oat\d\d-[\w-]{20,400}$/.test(val)) return machineAction(m, "claude_token", { account: x.id, token: val });
+        if (/^sk-ant-api\d\d-[\w-]{20,400}$/.test(val)) return machineAction(m, "claude_key", { account: x.id, key: val });
+        return machineAction(m, "claude_code", { account: x.id, code: val });
+      }, busy);
+
+      inp.onkeydown = (e) => { if (e.key === "Enter") { e.preventDefault(); confirmBtn.click(); } };
+
+      const restartBtn = machineButton(x.setup ? "Switch to long-lived token…" : "Sign in again", "Restart the sign-in procedure",
+        () => machineAction(m, "claude_login", { account: x.id, setup: !!x.setup }), busy, "btn small quiet");
+
+      acts.push(a, inp, confirmBtn, restartBtn);
+    } else if (steer && (mine || (x.id === "" && m.own))) {
+      const isLogin = !x.kind || x.kind === "login";
+      const isSigned = x.email || x.kind;
+      if (isLogin && isSigned) {
+        acts.push(machineButton("Switch to long-lived token…", `Start long-lived token setup for ${x.id || "this pc's own"} (valid 1 year)`,
+          () => machineAction(m, "claude_login", { account: x.id, setup: true }),
+          busy || pendingAction(m, "claude_token", (y) => y.account === x.id) || pendingAction(m, "claude_key", (y) => y.account === x.id)));
+        acts.push(machineButton("Change sign-in…", `Change sign-in: token, API key or new browser sign-in`,
+          () => accountAdd(m, x.id), busy, "btn small quiet"));
+      } else if (x.kind === "token") {
+        acts.push(machineButton("Switch to browser sign-in…", `Switch ${x.id || "this pc's own"} back to standard browser sign-in`,
+          () => machineAction(m, "claude_login", { account: x.id, setup: false }),
+          busy || pendingAction(m, "claude_token", (y) => y.account === x.id) || pendingAction(m, "claude_key", (y) => y.account === x.id)));
+        acts.push(machineButton("Change sign-in…", `Change sign-in: new token or API key`,
+          () => accountAdd(m, x.id), busy, "btn small quiet"));
+      } else if (!isSigned) {
+        acts.push(machineButton("Sign in…", `Sign ${x.id || "this pc's own"} in: browser, long-lived token or API key`,
+          () => accountAdd(m, x.id), busy));
+      } else {
+        acts.push(machineButton("Change sign-in…", `Change sign-in for ${x.id || "this pc's own"}`,
+          () => accountAdd(m, x.id), busy));
+      }
+
+      if (x.id === "" && x.email) {
+        acts.push(machineButton("Sign out…", "Sign this pc's own Claude out", () => {
+          const word = prompt(`Sign ${m.label}'s own Claude out? Its terminal sessions, workers and chats on it stop until it signs in again (Sign in here). Type SIGN OUT to go on.`);
+          return word === "SIGN OUT" ? machineAction(m, "claude_logout", { account: "", confirm: word }) : null;
+        }, pendingAction(m, "claude_logout"), "btn small quiet"));
+      }
     }
     if (steer && mine && x.kind === "apikey") acts.push(machineButton("Budget…", "A monthly budget: the page shows what is left of it", () => {
       const v = prompt(`Monthly budget for ${x.id || "this pc's own"} in dollars (0: none)`, x.budget || "");
@@ -569,7 +605,7 @@ function accountForm(title, intro, fields, go, send) {
 const ACCOUNT_KIND = { token: "long-lived token", apikey: "API key", login: "browser sign-in" };
 // How an account signs in: [value, button, what it is, what to paste (none: the browser), its form]
 const ACCOUNT_WAYS = [
-  ["login", "Browser", "Sign in with the account in your browser; claude.com then shows a code to paste here. Uses claude setup-token so it holds for 1 year.", "", ""],
+  ["login", "Browser", "Sign in with the account in your browser; claude.com then shows a code to paste here. Standard subscription sign-in.", "", ""],
   ["token", "Long-lived token", "Run claude setup-token in a terminal on any pc and paste the token it prints. It holds for a year and uses the account's subscription.", "sk-ant-oat01-…", "sk-ant-oat\\d\\d-[\\w\\-]{20,400}"],
   ["apikey", "API key", "An API key from the Anthropic Console (console.anthropic.com > API keys). Billed per use, not the subscription.", "sk-ant-api03-…", "sk-ant-api\\d\\d-[\\w\\-]{20,400}"]];
 function accountAdd(m, account = null) { // null: a new account; "": the pc's own; a name: that account
@@ -587,10 +623,10 @@ function accountAdd(m, account = null) { // null: a new account; "": the pc's ow
   };
   for (const w of ACCOUNT_WAYS) { const b = el("button", null, w[1]); b.type = "button"; b.dataset.way = w[0]; b.onclick = () => pick(w); ways.append(b); }
   const intro = account === null ? ["Chats on this pc can then run under it (the model chip). Settings, plugins and skills stay the pc's own."]
-    : account === "" ? ["Browser signs in via claude.com (1 year token); the terminal keeps its own sign-in in ~/.claude. A long-lived token or API key runs this pc's chats and workers on it instead."] : [];
+    : account === "" ? ["Browser signs ~/.claude itself in again (the terminal too). A long-lived token or API key runs this pc's chats and workers on it instead; the terminal keeps its own sign-in. Browser again drops the token or key."] : [];
   const shown = accountForm(account === "" ? `This pc's own Claude on ${m.label}` : account ? `Sign ${account} in on ${m.label}` : `Add a Claude account on ${m.label}`,
     [...intro, ways, about], [...(account === null ? [["Name", name]] : []), ["Token", secret]], account === null ? "Add" : "Sign in", () => (way[0] === "login"
-      ? machineAction(m, "claude_login", { account: name.value })
+      ? machineAction(m, "claude_login", { account: name.value, setup: false })
       : machineAction(m, way[0] === "token" ? "claude_token" : "claude_key", { account: name.value, [way[0] === "token" ? "token" : "key"]: secret.value.trim() })));
   pick(way);
   return shown;
