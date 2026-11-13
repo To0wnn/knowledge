@@ -193,7 +193,8 @@ let justAdded = null;  // {project, user}: their row asks right away whether to 
 function pcShares(user, project) {
   const pcs = (state.pcs || []).filter((m) => m.projects.includes(project) && m.owner !== user);
   const box = el("div", "pc-shares");
-  if (!pcs.length) { box.append(el("span", "muted", "no pc has this project linked")); return box; }
+  const own = (state.pcs || []).filter((m) => m.projects.includes(project) && m.owner === user).map((m) => m.label);
+  if (!pcs.length) { box.append(el("span", "muted", own.length ? `chats on their own pc (${own.join(", ")})` : "no pc has this project linked")); return box; }
   const ask = justAdded && justAdded.project === project && justAdded.user === user;
   for (const m of pcs) {
     let mode = ((m.shares[project] || {})[user]) || "";
