@@ -1564,9 +1564,12 @@ async def board(browser, devices, secret: str) -> None:
         await pill.wait_for(state="hidden", timeout=2000)
         check(True, "Grid: Ctrl+End jumps in the card you point at")
         await pg.evaluate(tall, "")
+        check(await pg.evaluate("getComputedStyle([...bd.wraps.values()][0].querySelector('.ck-log')).overflowY === 'hidden'"), "Grid: unfocused card log has overflow hidden")
         await pg.evaluate("[...bd.wraps.values()][0].focus()")
+        check(await pg.evaluate("getComputedStyle([...bd.wraps.values()][0].querySelector('.ck-log')).overflowY === 'auto'"), "Grid: focused card log has overflow auto")
         await pg.keyboard.press("Escape")
         check(await pg.evaluate("document.activeElement === $('bd-stage') && !ck.view"), "Grid: Esc leaves a focused card for the grid")
+        check(await pg.evaluate("getComputedStyle([...bd.wraps.values()][0].querySelector('.ck-log')).overflowY === 'hidden'"), "Grid: Esc restores overflow hidden")
         fold = "document.querySelector('#bd .bd-frame-title').click()"  # with one project the title is hidden until folded
         await pg.evaluate(fold)
         shut = await pg.evaluate("(() => { const f = document.querySelector('#bd .bd-frame'), p = [...bd.frames].find(([, b]) => b === f)[0]; return [f.firstChild.getAttribute('aria-expanded'), [...bd.wraps.values()].filter((w) => (ck.chats.find((c) => c.id === w.dataset.id)?.project || '') === p).every((w) => w.hidden), !!f.firstChild.offsetParent]; })()")

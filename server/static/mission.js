@@ -281,6 +281,7 @@ function bdRender() {
       if (!w) {
         w = el("article", "bd-card"); w.tabIndex = 0; w.dataset.id = c.id;
         bd.wraps.set(k, w); back.push(card);
+        w.addEventListener("pointerdown", () => { if (!w.contains(document.activeElement)) w.focus({ preventScroll: true }); });
         w.addEventListener("keydown", (e) => { if (e.key === "Enter" && e.target === w) { e.preventDefault(); if (card.meta.draft) card.input.focus(); else card.openTab.click(); } });
       }
       if (card.root.parentNode !== w) w.replaceChildren(card.root); // back from the full chat (ckLayout moved it there); a new draft replaces an old one
