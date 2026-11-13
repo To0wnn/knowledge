@@ -2082,6 +2082,26 @@ def one_round(only: str = "") -> dict:
 
 # ---------------------------------------------------------------- remote actions (the Machines list)
 
+def account_busy(name: str) -> list:
+    """What runs on Claude account `name` now: its chats' ids and its workers' task ids."""
+    with LOCK:
+        ws = load("workers.json", {})
+    return chat.uses(name) + [w["id"] for w in ws.values() if w.get("account") == name and w.get("status") == "running"]
+
+
+def remove_waiting():
+    """Remove each Claude account whose Remove waited for its chats and workers; once, loudly when it fails."""
+    for name in accounts.removing():
+        if account_busy(name):
+            continue
+        try:
+            chat.end_idle(name)
+            log("remote", "Claude account removed after its work ended", accounts.remove(name))
+        except Exception as e:
+            log("error", f"Claude account {name} could not be removed", f"{type(e).__name__}: {e}"[:300])
+            accounts.note(name, accounts.folder(name), removing=False, error=f"Remove failed: {e}"[:300])
+
+
 def run_action(a: dict) -> str:
     """One action the owner queued in the web UI; only these, each with the companion's own code."""
     act, args = a.get("action"), a.get("args") or {}
@@ -2195,8 +2215,12 @@ def run_action(a: dict) -> str:
         return accounts.set_budget(str(args.get("account", "")), float(args.get("usd") or 0))
     if act == "claude_logout":  # the pc's own sign-in: the companion stays online, Sign in on the page brings it back
         return accounts.logout_own()
-    if act == "claude_remove":
-        return accounts.remove(str(args.get("account", "")))
+    if act == "claude_remove":  # in use: it goes once the chats and workers on it end (remove_waiting)
+        name = str(args.get("account", ""))
+        if account_busy(name):
+            return accounts.remove_later(name)
+        chat.end_idle(name)  # an idle live chat on it would hold its folder
+        return accounts.remove(name)
     if act == "trust_hooks":
         return trust(agent)
     if act == "link_folder":
@@ -2352,6 +2376,24 @@ def file_request(tok: str, f: dict):
         log("error", "Could not send a file answer to the web UI", f"{type(e).__name__}: {e}"[:300])
 
 
+SLOW_ACTIONS = {"claude_login", "claude_code"}  # a sign-in waits on claude itself; it changes only its own account
+
+
+def act_once(tok: str, a: dict, lock):
+    """Run one remote action and report how it went."""
+    try:
+        with lock:
+            ok, result = True, run_action(a)
+    except Exception as e:
+        ok, result = False, f"{type(e).__name__}: {e}"
+        log("error", f"Remote action {a.get('action')} failed", result[:300])
+    try:
+        server("POST", "/machine/actions/result", tok, {"id": a["id"], "ok": ok, "result": str(result)[:300]})
+    except Exception as e:
+        if not (refused(e) and remote_off(True)):
+            log("error", "Could not report a remote action's result", str(e)[:200])
+
+
 def actions_round():
     """Fetch the waiting actions for this machine, run each, report how it went; all in the activity log."""
     tok, changed = token_store.token(), False
@@ -2366,17 +2408,10 @@ def actions_round():
         changed = changed or a.get("action") in STATE_ACTIONS
         shown = {k: "(hidden)" if k in ("token", "code", "key") else v for k, v in (a.get("args") or {}).items()}  # a sign-in never in the log
         log("remote", f"Remote action {a.get('action')} from {a.get('by') or '?'}", json.dumps(shown)[:200])
-        try:
-            with ACTING:
-                ok, result = True, run_action(a)
-        except Exception as e:
-            ok, result = False, f"{type(e).__name__}: {e}"
-            log("error", f"Remote action {a.get('action')} failed", result[:300])
-        try:
-            server("POST", "/machine/actions/result", tok, {"id": a["id"], "ok": ok, "result": str(result)[:300]})
-        except Exception as e:
-            if not (refused(e) and remote_off(True)):
-                log("error", "Could not report a remote action's result", str(e)[:200])
+        if a.get("action") in SLOW_ACTIONS:  # waits up to 90 s on claude: never holds up a Stop behind it
+            threading.Thread(target=lambda a=a: (act_once(tok, a, contextlib.nullcontext()), tick()), daemon=True).start()
+            continue
+        act_once(tok, a, ACTING)
         if a.get("action") == "update_plugin":  # after its result went out, so a restart cannot swallow it
             UPDATE_NOW.set()
     if changed:  # the page shows the new state at once, not at the next minute's report
@@ -2977,6 +3012,7 @@ def chats_round() -> bool:
         if stop_is_news(cid, chat.stop(cid), time.time()):
             post({"chat": cid, "events": [{"kind": "info", "text": "Stopped (no turn ran here any more)."}], "done": True})
     chat.reap()  # live chats idle for a while end (the next message resumes them)
+    remove_waiting()
     for s in r.get("steer", []):  # Force: for the running turn, read by the agent's hook after its next step; after its files
         cid, by = str(s.get("chat", "")), str(s.get("by") or "")
         chat.in_order(cid, lambda cid=cid, by=by, text=str(s.get("text", "")): chat.steer(cid, by, chat.attach(text, fetch))
@@ -3367,6 +3403,25 @@ def main(argv: list):
         calls.clear(); assert update_plugins()[0].startswith("knowledge companion: its checkout"), "the companion's own checkout is part of the update"
         globals()["update_own_checkout"] = real_own
         globals()["installed"], globals()["plugin_version"], self_update.run, globals()["keep_trusted"] = real
+        # Remove of a Claude account in use: it waits for its chats and workers, then goes (remove_waiting)
+        gone, in_use = [], {"werk": ["c1"]}
+        real_acc = (accounts.removing, accounts.remove, accounts.remove_later, accounts.may, chat.uses, chat.end_idle)
+        accounts.removing, accounts.may = lambda: ["werk"], lambda *a: None
+        accounts.remove, accounts.remove_later = lambda n: gone.append(n) or f"{n}: removed", lambda n: f"{n}: removed once its work ends"
+        chat.uses, chat.end_idle = lambda n: in_use.get(n, []), lambda n: None
+        try:
+            assert run_action({"action": "claude_remove", "args": {"account": "werk"}}) == "werk: removed once its work ends"
+            remove_waiting()
+            assert gone == [], "a chat still works on it"
+            in_use.clear()
+            save("workers.json", {"p/T-1": {"id": "T-1", "status": "running", "account": "werk"}})
+            remove_waiting()
+            assert gone == [] and account_busy("werk") == ["T-1"], "a worker still runs on it"
+            save("workers.json", {})
+            remove_waiting()
+            assert gone == ["werk"], gone
+        finally:
+            accounts.removing, accounts.remove, accounts.remove_later, accounts.may, chat.uses, chat.end_idle = real_acc
         real_fqdn, socket.getfqdn = socket.getfqdn, lambda *a: sys.exit("LocalServer must not ask reverse DNS at its start")
         # A watched background shell: its file's tail goes to the server, once per change (again after 5 s); others nothing.
         sent, real_srv, out = [], globals()["server"], Path(tmp_state) / "b1.output"

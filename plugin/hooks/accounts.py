@@ -153,6 +153,8 @@ def env(name: str) -> dict:
     d = folder(name)
     if not d.is_dir():
         raise RuntimeError(f"there is no Claude account {name} on this pc (Machines > Claude Code > Accounts)")
+    if info(d).get("removing"):
+        raise RuntimeError(f"the Claude account {name} is removed once its running chats and workers end: pick another")
     sync(d)
     out = {"CLAUDE_CONFIG_DIR": str(d)}
     for f, var, _, _ in SECRETS.values():
@@ -500,6 +502,20 @@ def set_secret(name: str, kind: str, value: str, by: str = "") -> str:
     return f"{name or 'own'}: {'long-lived token' if kind == 'token' else 'API key'} saved" + (" (chats and workers; the terminal keeps its own sign-in)" if not name else "")
 
 
+def remove_later(name: str) -> str:
+    """Account `name` is in use: no new chat turn or worker starts on it (env), and the companion removes it once the
+    running ones end (companion.remove_waiting)."""
+    d = folder(name)
+    if not d.is_dir():
+        raise RuntimeError(f"there is no Claude account {name} on this pc")
+    write(d / INFO, {**info(d), "removing": True})
+    return f"{name}: removed once its running chats and workers end"
+
+
+def removing() -> list:
+    return [n for n in names() if info(ROOT / n).get("removing")]
+
+
 def remove(name: str) -> str:
     """Sign account `name` out and delete its folder: links are unlinked first, what they point to stays."""
     d = folder(name)
@@ -561,7 +577,7 @@ def listing(windows_of=None, now: float = 0) -> list:
             exp = int(st.get("expires") or 0)
         out.append({"id": n, "kind": kind, "email": st.get("email") or "", "plan": st.get("plan") or "",
                     "preview": prev, "at": at, "expires": exp, "error": i.get("error") or "",
-                    "by": str(i.get("by") or ""), **({"login": LOGINS[n]["url"], "setup": LOGINS[n].get("setup", False)} if n in LOGINS and LOGINS[n]["url"] else {}),
+                    "by": str(i.get("by") or ""), **({"removing": True} if i.get("removing") else {}), **({"login": LOGINS[n]["url"], "setup": LOGINS[n].get("setup", False)} if n in LOGINS and LOGINS[n]["url"] else {}),
                     "windows": win(n), **({"spent": spent(n, now), **({"budget": i["budget"]} if i.get("budget") else {})} if kind == "apikey" else {})})
     return out
 
@@ -810,6 +826,13 @@ def self_test():
             raise AssertionError("a guest takes no ownerless account over")
         except PermissionError:
             pass
+        assert remove_later("nieuw").startswith("nieuw: removed once") and removing() == ["nieuw"]
+        assert {a["id"]: a for a in listing()}["nieuw"]["removing"] is True
+        try:
+            env("nieuw")
+            raise AssertionError("no new run on an account waiting for removal")
+        except RuntimeError as e:
+            assert "removed once" in str(e), e
         remove("nieuw")
         # removing keeps everything the links point to
         assert remove("werk") == "werk: removed" and remove("thuis") == "thuis: removed"

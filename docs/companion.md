@@ -260,6 +260,14 @@ fixed remote actions and relays chats. Installing it is part of the client setup
   is). An account from before owners were kept counts as the pc owner's. The companion checks the owner again
   (`accounts.may`, with `pc_owner` from the server's action): the server only knows the accounts the pc reported, a
   minute late, so it lets an unknown name through as a new one. A first sign-in that gives no link leaves no folder.
+- **Remove while in use:** an account a chat turn (or its subagent or shell) or a worker runs on is not removed at
+  once: it is marked (`removing` in its info, "Removed once its chats and workers end" on the page), no new turn or
+  worker starts on it, and the companion removes it in its first round after the last one ended (`remove_waiting`;
+  a failure there lands in Activity and as the account's error).
+- **A joined person's message** while a turn runs on the starter's account waits for that turn to end (the chat says
+  so once) and then starts on the joined person's own account, never in the running process.
+- **Sign-in actions** (`claude_login`, `claude_code`, up to 90 s on claude) run on a thread of their own, outside the
+  action lock, so a Stop or other action on that pc is not held up behind them.
 - **Main account:** Make main on an account (`POST /ui/api/machines/claude-main`, kept per pc and person in
   `claude_main.json`): that person's new chats on that pc start on it. The pc owner's main also goes to the companion
   in the answer to its report (`claude_main`): its workers run under it, and the worker cap and the limit chip follow

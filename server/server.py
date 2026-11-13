@@ -6691,6 +6691,7 @@ def report_accounts(v) -> list:
                     # the sign-in page of Claude Code's own OAuth: opened by the owner's browser
                     **({"login": login} if login.startswith(("https://claude.com/", "https://claude.ai/")) and len(login) < 2000 else {}),
                     "windows": report_windows(a.get("windows")), "by": str(a.get("by") or "")[:80], "main": a.get("main") is True,
+                    "removing": a.get("removing") is True,
                     # an API key's money this month (Claude Code's total_cost_usd) and the budget its owner set
                     **{k: round(float(a[k]), 4) for k in ("spent", "budget") if isinstance(a.get(k), (int, float)) and not isinstance(a[k], bool) and 0 <= a[k] < 1e7}})
     return out

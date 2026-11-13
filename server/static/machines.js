@@ -664,7 +664,8 @@ function accountsCell(m) {
       const v = prompt(`Monthly budget for ${x.id || "this pc's own"} in dollars (0: none)`, x.budget || "");
       return v === null || !Number.isFinite(Number(v)) || Number(v) < 0 ? null : machineAction(m, "claude_budget", { account: x.id, usd: Number(v) });
     }, pendingAction(m, "claude_budget", (y) => y.account === x.id), "btn small quiet"));
-    if (steer && x.id && (mine || m.own)) acts.push(machineButton("Remove", `Sign ${x.id} out on ${m.label} and remove it`, () => confirm(`Remove the Claude account ${x.id} from ${m.label}? Chats that use it go back to the pc's own sign-in.`) ? machineAction(m, "claude_remove", { account: x.id }) : null,
+    if (x.removing) acts.push(el("span", "muted", "Removed once its chats and workers end"));
+    else if (steer && x.id && (mine || m.own)) acts.push(machineButton("Remove", `Sign ${x.id} out on ${m.label} and remove it`, () => confirm(`Remove the Claude account ${x.id} from ${m.label}? A chat or worker running on it finishes first; after that, chats that use it go back to the pc's own sign-in.`) ? machineAction(m, "claude_remove", { account: x.id }) : null,
       pendingAction(m, "claude_remove", (y) => y.account === x.id), "btn small quiet"));
     if (acts.length) { const row = el("div", "mx-pop-acts"); row.append(...acts); line.append(row); }
     box.append(line);

@@ -2045,6 +2045,20 @@ class AgyLive(CodexLive):
         self.log("chat", f"agy: live chat ended for a Force (exit {code})", f"chat {self.cid}")
 
 
+def uses(account: str) -> list:
+    """The chats whose agent works on Claude account `account` now (a turn, a subagent or a shell of it running)."""
+    return [cid for cid, lv in list(LIVE.items()) if getattr(lv, "account", "") == account and lv.alive()
+            and (lv.busy or lv.turn_open or lv.subs or lv.bg)]
+
+
+def end_idle(account: str):
+    """End the idle live chats on `account` (its folder is about to go); their next message resumes them."""
+    for cid, lv in list(LIVE.items()):
+        if getattr(lv, "account", "") == account and not getattr(lv, "restarting", False):
+            LIVE.pop(cid, None)
+            lv.close()
+
+
 def reap():
     """End live chats idle for IDLE_CLOSE, and the oldest idle ones over MAX_LIVE (the companion's loop calls it)."""
     for cid, lv in list(LIVE.items()):
@@ -2157,6 +2171,13 @@ def start(item: dict, post, log, linked, yolo, fetch=None):
             if not told:
                 told = True
                 post({"chat": cid, "events": [{"kind": "info", "text": f"Waits: {limit()[0]} agents run on this pc already (Machines: Limit). It starts by itself when one ends."}]})
+            time.sleep(TURN_WAIT)
+        told = False  # a running turn on another account (a joined person's message): after it, never into it
+        while (lv := LIVE.get(cid)) and lv.alive() and (lv.busy or lv.turn_open) and getattr(lv, "account", "") != account_of(item) \
+                and STOPS.get(cid, [gen])[0] == gen:
+            if not told:
+                told = True
+                post({"chat": cid, "events": [{"kind": "info", "text": "Waits: the turn that runs on another Claude account ends first."}]})
             time.sleep(TURN_WAIT)
         if (st := STOPS.get(cid, [0, True]))[0] != gen:  # Stopped while its files came: it never starts
             if not st[1]:  # nothing ran here to end the turn: this message's turn ends now, once
@@ -2656,6 +2677,20 @@ def self_test():
                             break
                         time.sleep(0.02)
                     assert ran == [("d", "later")] and len(posts) == 1, (ran, posts)
+                    # a joined person's message waits for the turn that runs on the starter's Claude account
+                    LIVE.clear()
+                    acc = LIVE["e"] = types.SimpleNamespace(busy=True, turn_open=False, subs=set(), bg={}, account="werk", alive=lambda: True)
+                    assert uses("werk") == ["e"] and uses("") == []
+                    posts.clear(); ran.clear()
+                    start({"chat": "e", "agent": "claude", "text": "mine"}, posts.append, None, None, None)
+                    time.sleep(0.2)
+                    assert not ran and [e["text"][:6] for p in posts for e in p["events"]] == ["Waits:"], (ran, posts)
+                    acc.busy = False
+                    for _ in range(200):
+                        if ran:
+                            break
+                        time.sleep(0.02)
+                    assert ran == [("e", "mine")] and uses("werk") == [], ran
                 finally:
                     LIVE.clear(); LIVE.update(keep_live); TURN_WAIT = keep_wait
             finally:
