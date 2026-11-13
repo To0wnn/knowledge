@@ -1282,7 +1282,10 @@ function ckCatalog(pcs) { // one entry per agent and model: [{agent, id, name, e
 const levels = (m) => CK_EFFORTS.filter((e) => (m.efforts || []).includes(e));
 const ckModelOf = (card) => (card.catalog || []).find((x) => x.agent === card.pick?.agent && x.id === card.pick?.id);
 // The extra Claude accounts on the chat's pc (Machines > Claude Code > Accounts); a draft's pc follows its folder.
-const ckAccounts = (card) => (ckPc(card.meta.draft ? (card.where_ || "").split("\n")[0] : card.meta.machine)?.agents?.claude?.accounts || []).filter((a) => a.id);
+// Your own Claude accounts on the chat's pc ("" = its own sign-in first); a draft's pc follows its folder.
+const ckAccPc = (card) => ckPc(card.meta.draft ? (card.where_ || "").split("\n")[0] : card.meta.machine);
+const ckAllAccounts = (card) => (ckAccPc(card)?.agents?.claude?.accounts || []).filter((a) => a.mine !== false);
+const ckAccounts = (card) => ckAllAccounts(card).filter((a) => a.id);
 function ckPicker(card) {
   const draft = card.meta.draft, mine = ckPc(card.meta.machine);
   card.catalog = ckCatalog(draft ? ckDraftPcs() : mine ? [mine] : []);
@@ -1298,7 +1301,9 @@ function ckPicker(card) {
       : first ? { agent: first.agent, id: first.id, effort: first.default || "" }
       : draft ? null : { agent: card.meta.agent, id: "", effort: "" }; // a model the pc no longer lists: the agent's own, never another agent's
   }
+  if (draft && !card.where_) { const f = ckDraftFolders(card)[0]; if (f) card.where_ = `${f.machine}\n${f.path}`; } // its pc first: the accounts are that pc's
   const accounts = card.pick?.agent === "claude" ? ckAccounts(card) : [];
+  if (draft && card.pick && !card.pick.accountSet) card.pick = { ...card.pick, account: ckAccPc(card)?.claudeMain || "" }; // your main account there
   if (card.pick?.account && !accounts.some((a) => a.id === card.pick.account)) card.pick = { ...card.pick, account: "" }; // gone from that pc
   const sig = JSON.stringify([card.catalog.map((x) => [x.agent, x.id, x.efforts, x.default, x.pcs]), card.pick, card.meta.agent, draft && agentProject, accounts.map((a) => a.id)]);
   if (card.picks.dataset.sig === sig) return; // unchanged: a poll must not close an open panel
@@ -1346,13 +1351,15 @@ function ckPicker(card) {
     panel.append(row);
   }
   if (accounts.length) { // which Claude account it runs under, from the next turn on
-    const row = el("div", "ck-mrow ck-account"), seg = el("div", "seg");
+    const row = el("div", "ck-mrow ck-account"), seg = el("div", "ck-mopts"); // like the models: a name, what is left under it
     row.append(el("span", "ck-mfam", "Account"), seg);
-    for (const a of [{ id: "" }, ...accounts]) {
-      const b = el("button", null, a.id || "own"); b.type = "button";
-      b.title = a.id ? `${a.email || ({ token: "long-lived token", apikey: "API key" })[a.kind] || "not signed in"}${usageWindows(a).length ? ` · ${usageText(a)}` : ""}` : "The pc's own Claude sign-in";
+    const own = ckAllAccounts(card).find((a) => a.id === "") || { id: "" }, main = ckAccPc(card)?.claudeMain || "";
+    for (const a of [own, ...accounts]) {
+      const b = el("button", "ck-mopt ck-acc", `${a.id || "own"}${a.id === main ? " (main)" : ""}`), left = a.pc ? "" : accountLeft(a); b.type = "button";
+      if (left) b.append(el("small", null, left)); // what is left of it, at a glance
+      b.title = a.id ? a.email || ({ token: "long-lived token", apikey: "API key" })[a.kind] || "not signed in" : a.pc ? "The pc's own Claude sign-in (its owner's)" : a.email || "The pc's own Claude sign-in";
       b.setAttribute("aria-pressed", String((card.pick.account || "") === a.id));
-      b.onclick = (e) => { e.stopPropagation(); card.pick = { ...card.pick, account: a.id, touched: true }; ckPicker(card); };
+      b.onclick = (e) => { e.stopPropagation(); card.pick = { ...card.pick, account: a.id, accountSet: true, touched: true }; ckPicker(card); };
       seg.append(b);
     }
     panel.append(row);
@@ -1434,7 +1441,7 @@ async function ckStart(card, text) { // the draft's first message: make the chat
     const m = ckPc(machine);
     let failed = "";
     try {
-      await api("/ui/api/chat/send", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ machine, id: res.chat.id, text, model: p.id, effort: p.effort, ...(p.account ? { account: p.account } : {}) }) });
+      await api("/ui/api/chat/send", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ machine, id: res.chat.id, text, model: p.id, effort: p.effort, ...(p.agent === "claude" ? { account: p.account || "" } : {}) }) });
       store.set("kn_chat_pick", JSON.stringify({ agent: p.agent, id: p.id, effort: p.effort, machine, folder }));
     } catch (err) { failed = err.message; } // the chat exists now: go there with the text kept, never make another
     card.input.value = ""; ckDraftKeep(card); ckDrop(ckKey(CK_DRAFT)); ck.summaryAt = 0;
@@ -1516,7 +1523,11 @@ function ckPaint(card) {
   card.state.hidden = false;
   const before = Object.entries(m.used_by || {}); // agents this chat ran in before (continued elsewhere): each its own count
   card.tok.hidden = !m.used && !m.ctx && !before.length; // the conversation's tokens: its context now and all it used
-  setText(card.tok, [m.ctx && `${ckNum(m.ctx)} context`, m.used && `${ckNum(m.used)} used${before.length ? ` (${AGENT_NAME[m.agent] || m.agent})` : ""}`,
+  // the Claude account it runs on and what is left of it (yours only: another person's account is never named here)
+  const acc = m.agent === "claude" ? (ckPc(m.machine)?.agents?.claude?.accounts || []).find((a) => a.id === (m.account || "") && a.mine !== false && !a.pc) : null;
+  const accText = acc && (acc.id || (ckPc(m.machine)?.agents?.claude?.accounts || []).length > 1) ? `${acc.id || "own"}${accountLeft(acc) ? `: ${accountLeft(acc)}` : ""}` : "";
+  card.tok.hidden = card.tok.hidden && !accText;
+  setText(card.tok, [accText, m.ctx && `${ckNum(m.ctx)} context`, m.used && `${ckNum(m.used)} used${before.length ? ` (${AGENT_NAME[m.agent] || m.agent})` : ""}`,
     ...before.map(([a, n]) => `${ckNum(n)} (${AGENT_NAME[a] || a})`)].filter(Boolean).join(" · "));
   card.tok.title = "Context: what the agent sent for its last step. Used: every token of this chat so far, cache reads included"
     + (before.length ? "; per agent, since the chat continued in another one." : ".");

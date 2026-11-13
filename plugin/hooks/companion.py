@@ -1023,7 +1023,27 @@ def save_settings(change: dict):
             s["workersAllowed"] = change["workersAllowed"] is True
         if "maxAgents" in change:
             s["maxAgents"] = max(0, int(change["maxAgents"]))
+        if "claudeMain" in change:
+            s["claudeMain"] = str(change["claudeMain"] or "")
         save("settings.json", s)
+
+
+def claude_main() -> str:
+    """The Claude account this pc's owner made main (Machines > Accounts): workers run under it and the usage limit
+    follows it; "" = the pc's own sign-in, also when that account is gone."""
+    name = str(load("settings.json", {}).get("claudeMain") or "")
+    return name if name in accounts.names() else ""
+
+
+def claude_windows(name: str, ws: dict, now: float) -> list:
+    """One Claude account's usage windows: its workers' own stream-json output (until that window resets), its chat
+    turns, and for the pc's own sign-in also an interactive Claude's status line."""
+    logs = sorted((Path(w["log"]) for w in ws.values() if w.get("agent") == "claude" and (w.get("account") or "") == name
+                   and w.get("log") and Path(w["log"]).exists()), key=lambda f: f.stat().st_mtime)
+    got = next((g for f in reversed(logs) if (g := workers.claude_usage(str(f), now))), [])
+    if name:
+        return agent_hooks.limits.merge(got, kept_windows(accounts.folder(name) / accounts.USAGE, now))
+    return agent_hooks.limits.merge(got, agent_hooks.limits.claude_used(now), kept_windows(STATE / "usage-claude-chat.json", now))
 
 
 def usage(agent: str, ws: dict, now: float):
@@ -1040,10 +1060,12 @@ def kept_windows(f: Path, now: float) -> list:
         return []
 
 
-def claude_accounts(now: float) -> list:
-    """The Claude accounts on this pc for the Machines list (accounts.py); [] when they cannot be read now."""
+def claude_accounts(now: float, ws: dict) -> list:
+    """The Claude accounts on this pc for the Machines list (accounts.py), each with its usage and the main one
+    marked; [] when they cannot be read now."""
     try:
-        return accounts.listing(kept_windows, now)
+        main = claude_main()
+        return [{**a, **({"main": True} if a["id"] == main else {})} for a in accounts.listing(lambda n: claude_windows(n, ws, now), now)]
     except Exception as e:  # the report goes on without them
         log("error", "Could not read the Claude accounts", f"{type(e).__name__}: {e}"[:300])
         return []
@@ -1268,14 +1290,9 @@ def usage_live(agent: str, ws: dict, now: float):
     status line under 15 min old; Codex from its newest rollout of the last 15 min, else asked without a session
     (codex_rate_read); agy from a registered agy's language server."""
     try:
-        if agent == "claude":
-            logs = sorted((Path(w["log"]) for w in ws.values() if w.get("agent") == "claude" and w.get("log") and Path(w["log"]).exists()),
-                          key=lambda f: f.stat().st_mtime)
-            # a worker's reading stays true until its window resets (claude_usage drops those), however old the log
-            got = next((g for f in reversed(logs) if (g := workers.claude_usage(str(f), now))), [])
-            # a web chat's turn (chat.py keep_usage): fresh while the person only chats; usage never drops inside a
-            # window and expired ones are left out: per window the fullest reading is the true one
-            return agent_hooks.limits.merge(got, agent_hooks.limits.claude_used(now), kept_windows(STATE / "usage-claude-chat.json", now))
+        if agent == "claude":  # the account workers run under: the worker cap and the limit chip follow it
+            # a reading stays true until its window resets, however old; per window the fullest reading is the true one
+            return claude_windows(claude_main(), ws, now)
         if agent == "codex":
             days = [time.localtime(now - d * 86400) for d in (0, 1)]
             files = [f for d in days for f in CODEX.glob(f"sessions/{d.tm_year:04d}/{d.tm_mon:02d}/{d.tm_mday:02d}/rollout-*.jsonl")
@@ -1341,7 +1358,8 @@ def start_worker(t: dict, tok: str, now: float, ws: dict = None) -> tuple:
                     key=lambda w: w.get("started", 0), default=None)
         where = {**where, **{k: first[k] for k in ("base", "base_branch", "config") if first.get(k)}} if first else where
         yolo = bool(load("yolo.json", {}).get(t["agent"], {}).get("on"))
-        rec = workers.start(t["agent"], t, token_store.machine().get("label") or socket.gethostname(), where, yolo, nonce)
+        rec = workers.start(t["agent"], t, token_store.machine().get("label") or socket.gethostname(), where, yolo, nonce,
+                            account=claude_main() if t["agent"] == "claude" else "")
     except Exception as e:
         release(t, tok)
         raise RuntimeError(f"could not start a {AGENTS[t['agent']][0]} worker: {e}") from e
@@ -1372,6 +1390,8 @@ def check_workers(ws: dict, tok: str, now: float, lim: dict):
                 # exit code unknown (the companion restarted while it ran): its outcome decides, below: a task handed
                 # back or gone is finished, one still open failed
                 w.update(status="stopped" if w.get("told") or w.get("chat") else "finished" if code in (0, "unknown") else "failed", ended=now, code=code)
+                if w.get("account") and w.get("log"):  # an API key worker's money, once, at its end
+                    accounts.add_spend(w["account"], workers.claude_cost(w["log"]))
                 if not w.get("owner_stopped"):  # stopped on purpose: no other pc may take it at once, only after the lease
                     release(w, tok)  # a line it claimed but left open may start again at once (the server's idle notice)
                 workers.stop_path(w).unlink(missing_ok=True)
@@ -1876,7 +1896,7 @@ def report(tok: str, ws: dict, lim: dict, wait: list, now: float, waiting=None, 
             "agents": {a: {"yolo": bool(yolo.get(a, {}).get("on")), "trusted": not untrusted(a, folders), "limit": lim.get(a),
                      "resets": (resets or {}).get(a), "windows": (windows or {}).get(a, []), **({"plugin": v} if (v := plugin_version(a)) else {}),  # known before a session
                      **({"cli": v} if (v := cli_version(a, now)) else {}), **({"channel": claude_channel()} if a == "claude" else {}),
-                     **({"accounts": claude_accounts(now)} if a == "claude" else {}),
+                     **({"accounts": claude_accounts(now, ws)} if a == "claude" else {}),
                      "models": chat.models(a),  # what a chat may pick (cached for hours)
                      # the slash commands its last live chat here offered: long, so only when changed (the server keeps them)
                      **({"commands": c} if (c := chat.commands(a)) != _COMMANDS_SENT.get(a, (0, None))[1] or now - _COMMANDS_SENT[a][0] > 6 * 3600 else {}),
@@ -1890,6 +1910,8 @@ def report(tok: str, ws: dict, lim: dict, wait: list, now: float, waiting=None, 
     answer = server("POST", "/machine/report", tok, body)
     NEWEST["v"] = str(answer.get("newest") or "")
     adopt_aliases(answer.get("aliases"))
+    if isinstance(answer.get("claude_main"), str) and answer["claude_main"] != str(load("settings.json", {}).get("claudeMain") or ""):
+        save_settings({"claudeMain": answer["claude_main"]})  # the owner's main account, chosen on the page
     _COMMANDS_SENT.update({a: (now, v["commands"]) for a, v in body["agents"].items() if "commands" in v})
     tools.TOKEN = str(answer.get("github_token") or "")  # for tool downloads only: agents keep their own gh login
     try:
@@ -2156,14 +2178,18 @@ def run_action(a: dict) -> str:
         set_tool(tid, auto=args.get("on") is True)
         return f"{tools.catalog()[tid]['name']}: daily update {'on' if args.get('on') is True else 'off'}"
     if act == "claude_login":  # the sign-in link goes to the page with the next report
-        accounts.login(str(args.get("account", "")))
+        accounts.login(str(args.get("account", "")), by=str(a.get("by") or ""))
         return f"{args.get('account')}: open the sign-in link under Machines, then paste the code there"
     if act == "claude_code":
         return accounts.code(str(args.get("account", "")), str(args.get("code", "")))
     if act == "claude_token":
-        return accounts.set_secret(str(args.get("account", "")), "token", str(args.get("token", "")))
+        return accounts.set_secret(str(args.get("account", "")), "token", str(args.get("token", "")), by=str(a.get("by") or ""))
     if act == "claude_key":
-        return accounts.set_secret(str(args.get("account", "")), "apikey", str(args.get("key", "")))
+        return accounts.set_secret(str(args.get("account", "")), "apikey", str(args.get("key", "")), by=str(a.get("by") or ""))
+    if act == "claude_budget":
+        return accounts.set_budget(str(args.get("account", "")), float(args.get("usd") or 0))
+    if act == "claude_logout":  # the pc's own sign-in: the companion stays online, Sign in on the page brings it back
+        return accounts.logout_own()
     if act == "claude_remove":
         return accounts.remove(str(args.get("account", "")))
     if act == "trust_hooks":
@@ -2366,7 +2392,7 @@ def live_loop():
         time.sleep(LIVE_EVERY)
 
 
-STATE_ACTIONS = {"claude_login", "claude_code", "claude_token", "claude_key", "claude_remove", "install_tool", "remove_tool", "tool_auto", "yolo", "admin", "workers_allowed", "max_agents", "link_folder", "unlink_folder", "trust_hooks", "stop_worker", "restart", "merge", "takeover", "archive_worker", "apply_models"}
+STATE_ACTIONS = {"claude_budget", "claude_logout", "claude_login", "claude_code", "claude_token", "claude_key", "claude_remove", "install_tool", "remove_tool", "tool_auto", "yolo", "admin", "workers_allowed", "max_agents", "link_folder", "unlink_folder", "trust_hooks", "stop_worker", "restart", "merge", "takeover", "archive_worker", "apply_models"}
 
 
 # ---------------------------------------------------------------- the page
@@ -3192,7 +3218,8 @@ def take_over(args: dict, tok: str) -> str:
         session = worker_session_id(w)
         if not session:
             raise RuntimeError("its session id is unknown (it made no step yet); it was stopped: start it again or chat in its folder")
-        r = server("POST", "/machine/chats/adopt", tok, {"worker": key, "started": w.get("started"), "agent": w["agent"], "folder": w["cwd"], "session": session})
+        r = server("POST", "/machine/chats/adopt", tok, {"worker": key, "started": w.get("started"), "agent": w["agent"], "folder": w["cwd"], "session": session,
+                                                       **({"account": w["account"]} if w.get("account") else {})})  # it resumes under the account it ran on
         with LOCK:
             ws = load("workers.json", {})
             if key in ws:
@@ -3597,7 +3624,7 @@ def main(argv: list):
         assert did[0][0] == "claim" and did[0][1].startswith("worker:") and did[1:] == [("release",)], did
         # A hand-over in the first session's worktree keeps that session's base; only the newest session rolls back.
         g["workers"] = type("W", (), {"worktree": staticmethod(lambda f, i, p: {"cwd": "/wt", "worktree": "/wt", "branch": "task/T-1", "base": "Y"}),
-                                      "start": staticmethod(lambda a, t, m, where, y, n: {"id": t["id"], **where})})
+                                      "start": staticmethod(lambda a, t, m, where, y, n, account="": {"id": t["id"], **where})})
         first = {"id": "T-1", "worktree": "/wt", "base": "X", "started": 1, "status": "finished", "branch": "task/T-1", "cwd": "/wt"}
         rec, _ = start_worker({**task, "id": "T-1-cont"}, "", 1000, {"p/T-1": first})
         assert rec["base"] == "X", rec

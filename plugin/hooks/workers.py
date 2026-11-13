@@ -374,8 +374,9 @@ def kill(w: dict, hard: bool = False):
 WIN_FLAGS, BREAKAWAY = 0x08000000 | 0x00000200, 0x01000000  # CREATE_NO_WINDOW | CREATE_NEW_PROCESS_GROUP, CREATE_BREAKAWAY_FROM_JOB
 
 
-def start(agent: str, task: dict, machine: str, where: dict, yolo: bool, nonce: str) -> dict:
-    """Start the worker process; its record (what the companion keeps and the Machines list shows)."""
+def start(agent: str, task: dict, machine: str, where: dict, yolo: bool, nonce: str, account: str = "") -> dict:
+    """Start the worker process; its record (what the companion keeps and the Machines list shows). account: the
+    extra Claude account it runs under (accounts.py), "" the pc's own sign-in."""
     exe = shutil.which(agent)
     if not exe:
         raise RuntimeError(f"{agent} is not on PATH")
@@ -383,6 +384,9 @@ def start(agent: str, task: dict, machine: str, where: dict, yolo: bool, nonce: 
     log = DIR / f"{safe(task['project'])}-{safe(task['id'])}-{int(time.time())}.log"
     env = {**os.environ, "KNOWLEDGE_WORKER": task["id"], "KNOWLEDGE_START_NONCE": nonce, "KNOWLEDGE_YOLO": "1" if yolo else "",
            "KNOWLEDGE_ASKS": remember_ask(f"task-{task['project']}-{task['id']}", task.get("text") or "")}
+    if account:
+        import accounts  # here: accounts imports this module for its .cmd shim
+        env = {**{k: v for k, v in env.items() if k not in accounts.AUTH_ENV}, **accounts.env(account)}
     env = env if yolo else git_safe_env(env)
     ckpt = checkpoint(where["cwd"], task["id"]) if yolo and where.get("branch") else ""
     cmd, note = argv(agent, exe, prompt(task, agent, machine, where, yolo), yolo, where), ""
@@ -402,7 +406,7 @@ def start(agent: str, task: dict, machine: str, where: dict, yolo: bool, nonce: 
     ident = identity(p.pid)
     follow = f"Get-Content -Wait '{log}'" if os.name == "nt" else f"tail -f '{log}'"
     return {"id": task["id"], "project": task["project"], "agent": agent, "pid": p.pid, "ident": ident, "started": time.time(), "status": "running",
-            "nonce": nonce, "yolo": yolo, "log": str(log), "checkpoint": bool(ckpt), **where,
+            "nonce": nonce, "yolo": yolo, "log": str(log), "checkpoint": bool(ckpt), **where, **({"account": account} if account else {}),
             "title": " ".join(str(task.get("text") or "").split())[:120],  # a person reads this; the line itself may be gone later
             "open": f"{agent} worker for {task['id']} (pid {p.pid}) in {where['cwd']}" + (f", branch {where['branch']}" if where.get("branch") else "")
                     + f". It runs headless: follow its output with {follow}; when it is done, look at the branch with git log." + note}
@@ -561,6 +565,25 @@ def claude_usage(log: str, now: float):
             except ValueError:
                 continue
     return []
+
+
+def claude_cost(log: str) -> float:
+    """What a `claude -p --output-format stream-json` run cost: its last result's total_cost_usd, which counts the whole
+    process so far (measured on claude 2.1.323), so the highest one."""
+    total = 0.0
+    try:
+        with open(log, "rb") as f:
+            for line in f:
+                if b'"total_cost_usd"' in line:
+                    try:
+                        e = json.loads(line)
+                    except ValueError:
+                        continue
+                    if e.get("type") == "result" and isinstance(e.get("total_cost_usd"), (int, float)):
+                        total = max(total, float(e["total_cost_usd"]))
+    except OSError:
+        pass
+    return total
 
 
 def claude_rate(event: dict, now: float):
@@ -836,6 +859,9 @@ def self_test():
         f.write(json.dumps({"type": "rate_limit_event", "rate_limit_info": {"unifiedWindows": {
             "five_hour": {"utilization": 0.93, "resetsAt": now + 60}, "seven_day": {"utilization": 0.5, "resetsAt": now + 600}}}}) + "\n")
     assert claude_usage(f.name, now) == [(93.0, "5h", now + 60), (50.0, "7d", now + 600)]
+    with open(f.name, "a", encoding="utf-8") as out:
+        out.write('{"type":"result","total_cost_usd":0.25}\nnot json total_cost_usd\n{"type":"result","total_cost_usd":1.5}\n{"type":"assistant","total_cost_usd":9}\n')
+    assert claude_cost(f.name) == 1.5 and claude_cost(f.name + ".gone") == 0.0, "a worker's cost: its last (highest) result only"
     os.unlink(f.name)
     print("ok")
 

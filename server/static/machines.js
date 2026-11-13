@@ -485,32 +485,56 @@ function workersCell(m, a) {
   return val(running ? `${running} running` : "none running", "muted");
 }
 // Claude accounts on one pc: the pc's own sign-in and each extra one (accounts.py), signed in by browser, long-lived
-// token or API key, and Remove. A chat picks one in its model chip; the sign-in itself never leaves the pc.
+// token or API key; what is left of each; a main one per person (their new chats there start on it, on their own pc
+// its workers run under it). Each person sees only their own accounts; the pc's owner sees who added the others.
+const usesPc = (m) => Object.values(m.shared || {}).some((x) => ["use", "yolo", "admin"].includes(x));
+const accountSteer = (m) => !!m.online && !!m.companion && !m.old && (steersAgent(m, "claude") || !m.own && usesPc(m));
+async function accountMain(m, account) {
+  try { await api("/ui/api/machines/claude-main", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ machine: m.id, account }) }); }
+  catch (e) { toast(e.message); }
+  await loadMachines();
+}
 function accountsCell(m) {
   const ag = m.agents?.claude;
   if (!ag) return null;
   if (!ag.accounts) return val(steersAgent(m, "claude") ? "Update the plugin to add accounts" : "—", "muted");
-  const box = el("div", "mx-accounts"), steer = steersAgent(m, "claude");
+  const box = el("div", "mx-accounts"), steer = accountSteer(m), main = m.claudeMain || "";
   for (const x of ag.accounts) {
-    const line = el("div", "mx-account"), who = x.email || ACCOUNT_KIND[x.kind] || (x.id ? "not signed in" : "unknown");
-    line.append(el("b", null, x.id || "own"), " ", val(who, x.email || ACCOUNT_KIND[x.kind] ? "" : "mx-diff"));
+    const line = el("div", "mx-account"), mine = x.mine !== false;
+    const who = x.pc ? "this pc's own sign-in" : x.email || ACCOUNT_KIND[x.kind] || (x.id ? "not signed in" : "not signed in");
+    line.append(el("b", null, x.id || "own"), " ", val(who, x.pc || x.email || ACCOUNT_KIND[x.kind] ? "" : "mx-diff"));
     if (x.plan) line.append(" ", val(x.plan, "muted"));
-    if (usageWindows(x).length) line.append(" ", val(usageText(x), "muted"));
+    if (mine && x.id === main) line.append(el("span", "pill", "main"));
+    if (!mine) line.append(" ", val(`added by ${x.by || "?"}`, "muted"));
+    if (!x.pc && (usageWindows(x).length || x.kind === "apikey")) line.append(accountBars(x));
     if (x.error) line.append(el("p", "machine-error", x.error));
-    if (x.id && steer) {
-      const busy = pendingAction(m, "claude_login", (y) => y.account === x.id) || pendingAction(m, "claude_code", (y) => y.account === x.id);
-      if (x.login) {
-        const a = el("a", "btn small", "Open sign-in"); a.href = x.login; a.target = "_blank"; a.rel = "noopener noreferrer";
-        a.title = "Sign in with the account in a new tab; claude.com then shows a code to paste here";
-        line.append(" ", a, " ", machineButton("Paste code…", "The code the sign-in page showed", () => accountCode(m, x.id), busy));
-      } else line.append(" ", machineButton(x.kind ? "Change sign-in…" : "Sign in…", `Sign ${x.id} in: browser, long-lived token or API key`, () => accountAdd(m, x.id),
+    const acts = [];
+    if (steer && mine && x.id !== main) acts.push(actionButton("Make main", () => accountMain(m, x.id), "btn small quiet"));
+    const busy = pendingAction(m, "claude_login", (y) => y.account === x.id) || pendingAction(m, "claude_code", (y) => y.account === x.id);
+    if (steer && mine && x.login) {
+      const a = el("a", "btn small", "Open sign-in"); a.href = x.login; a.target = "_blank"; a.rel = "noopener noreferrer";
+      a.title = "Sign in with the account in a new tab; claude.com then shows a code to paste here";
+      acts.push(a, machineButton("Paste code…", "The code the sign-in page showed", () => accountCode(m, x.id), busy));
+    } else if (steer && mine && x.id) {
+      acts.push(machineButton(x.kind ? "Change sign-in…" : "Sign in…", `Sign ${x.id} in: browser, long-lived token or API key`, () => accountAdd(m, x.id),
         busy || pendingAction(m, "claude_token", (y) => y.account === x.id) || pendingAction(m, "claude_key", (y) => y.account === x.id)));
-      line.append(" ", machineButton("Remove", `Sign ${x.id} out on ${m.label} and remove it`, () => confirm(`Remove the Claude account ${x.id} from ${m.label}? Chats that use it go back to the pc's own account.`) && machineAction(m, "claude_remove", { account: x.id }),
-        pendingAction(m, "claude_remove", (y) => y.account === x.id), "btn small quiet"));
+    } else if (steer && x.id === "" && m.own) { // the pc's own: the companion stays online, so it signs in again from here
+      acts.push(machineButton(x.email ? "Sign in again" : "Sign in", "Sign this pc's own Claude in with the browser", () => machineAction(m, "claude_login", { account: "" }), busy));
+      if (x.email) acts.push(machineButton("Sign out…", "Sign this pc's own Claude out", () => {
+        const word = prompt(`Sign ${m.label}'s own Claude out? Its terminal sessions, workers and chats on it stop until it signs in again (Sign in here). Type SIGN OUT to go on.`);
+        return word === "SIGN OUT" ? machineAction(m, "claude_logout", { account: "", confirm: word }) : null;
+      }, pendingAction(m, "claude_logout"), "btn small quiet"));
     }
+    if (steer && mine && x.kind === "apikey") acts.push(machineButton("Budget…", "A monthly budget: the page shows what is left of it", () => {
+      const v = prompt(`Monthly budget for ${x.id} in dollars (0: none)`, x.budget || "");
+      return v === null || !Number.isFinite(Number(v)) || Number(v) < 0 ? null : machineAction(m, "claude_budget", { account: x.id, usd: Number(v) });
+    }, pendingAction(m, "claude_budget", (y) => y.account === x.id), "btn small quiet"));
+    if (steer && x.id && (mine || m.own)) acts.push(machineButton("Remove", `Sign ${x.id} out on ${m.label} and remove it`, () => confirm(`Remove the Claude account ${x.id} from ${m.label}? Chats that use it go back to the pc's own sign-in.`) ? machineAction(m, "claude_remove", { account: x.id }) : null,
+      pendingAction(m, "claude_remove", (y) => y.account === x.id), "btn small quiet"));
+    if (acts.length) { const row = el("div", "mx-pop-acts"); row.append(...acts); line.append(row); }
     box.append(line);
   }
-  if (steer) box.append(machineButton("Add account…", "Another Claude account on this pc, for chats to pick", () => accountAdd(m)));
+  if (steer) box.append(machineButton("Add account…", "Another Claude account on this pc, for your chats to pick", () => accountAdd(m)));
   return box;
 }
 // A small form in a dialog (it is not redrawn with the list, so what is typed stays); done once closed or sent.
@@ -634,16 +658,18 @@ function compareTable(pcs, here, mine) {
     const name = el("div", "mx-agent-name"), mark = el("span", "mx-mark", AGENT_MARK[a] || a[0].toUpperCase());
     mark.setAttribute("aria-hidden", "true");
     name.append(mark, el("span", null, AGENT_NAME[a] || a));
-    if (!mine) name.append(el("small", "muted", "their account"));
+    const guest = pcs.every((m) => !m.own && !(m.tokens || []).length); // a pc shared with you: only your own accounts there
+    if (!mine && !guest) name.append(el("small", "muted", "their account"));
     const head = mxRow("mx-agent", name, []);
-    head.insertBefore(meters(pcs, a), head.lastChild);
+    if (!guest) head.insertBefore(meters(pcs, a), head.lastChild);
     grid.append(head);
+    if (guest) { grid.append(row("", "Accounts", pcs.map((m) => accountsCell(m)))); continue; }
     grid.append(row("", "Version", pcs.map((m) => versionCell(m, a))));
     grid.append(row("", "Plugin", pcs.map((m) => pluginCell(m, a))));
     grid.append(row("", "Hooks", pcs.map((m) => hooksCell(m, a))));
     grid.append(row("", "YOLO", pcs.map((m) => yoloCell(m, a))));
     grid.append(row("", "Workers", pcs.map((m) => workersCell(m, a))));
-    if (a === "claude" && mine) grid.append(row("", "Accounts", pcs.map((m) => accountsCell(m))));
+    if (a === "claude") grid.append(row("", "Accounts", pcs.map((m) => accountsCell(m))));
   }
   const ids = [...new Set(pcs.flatMap((m) => Object.keys(m.companion?.tools || {})))].sort((x, y) => {
     const name = (id) => pcs.map((m) => m.companion?.tools?.[id]?.name).find(Boolean) || id;

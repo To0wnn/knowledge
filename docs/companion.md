@@ -242,18 +242,37 @@ fixed remote actions and relays chats. Installing it is part of the client setup
     way and given as `ANTHROPIC_API_KEY` (Claude Code then runs in `api_key` mode, also in `claude -p`). A token and a
     key replace each other; a browser sign-in removes both. The pc's own `CLAUDE_CODE_OAUTH_TOKEN`, `ANTHROPIC_API_KEY`
     and `ANTHROPIC_AUTH_TOKEN` never reach a chat of another account.
-- **How a chat uses it:** the model chip of a Claude chat gets an Account row (own first) when the pc has extra
-  accounts; the choice holds for the chat from the next turn on (`account` in the chat, checked against what the pc
-  reported). The companion then starts Claude with `CLAUDE_CONFIG_DIR=~/.knowledge/claude-accounts/<name>`. That folder
-  links everything of `~/.claude` (settings, plugins, skills, CLAUDE.md, `projects/` with the sessions), so the chat keeps
-  its plugin and resumes its session after a switch; only the sign-in (`.credentials.json`, the Keychain on macOS),
-  `.claude.json` and Claude's daemon are its own. On Windows folders are junctions and files copies refreshed before
-  each run. The plugin's secret options (the knowledge token on a pc without a keyring) are copied into its sign-in once.
-- **Secrets on the server:** a code, token or key travels as a fixed remote action, refused while the pc is offline, handed
-  to the pc once and then replaced by "(hidden)" in the queue; it never shows on the page, in the audit log or in the
-  companion's activity.
-- **Not (yet):** workers run under the pc's own account; the usage chip and the worker cap follow the pc's own account;
-  Codex and agy accounts are not covered.
+- **How a chat uses it:** the model chip of a Claude chat gets an Account row (own first, each with what is left of
+  it) when the pc has accounts of yours; the choice holds for the chat from the next turn on (`account` in the chat,
+  checked against what the pc reported and against who added it). The companion then starts Claude with
+  `CLAUDE_CONFIG_DIR=~/.knowledge/claude-accounts/<name>`. That folder links everything of `~/.claude` (settings,
+  plugins, skills, CLAUDE.md, `projects/` with the sessions), so the chat keeps its plugin and resumes its session after
+  a switch; only the sign-in (`.credentials.json`, the Keychain on macOS), `.claude.json` and Claude's daemon are its
+  own. On Windows folders are junctions and files copies, refreshed before each run when size, time or (under 1 MB)
+  content differ. The plugin's secret options (the knowledge token on a pc without a keyring) are copied into its
+  sign-in once, right after the browser sign-in.
+- **Whose account:** every extra account keeps who added it (`by`). Each person sees and picks only their own; the
+  pc's owner also sees the others ("added by …") and may Remove them, never sign them in or budget them. Someone a
+  pc is shared with for use adds their own accounts there (never the pc's own sign-in, which they see without who it
+  is). An account from before owners were kept counts as the pc owner's.
+- **Main account:** Make main on an account (`POST /ui/api/machines/claude-main`, kept per pc and person in
+  `claude_main.json`): that person's new chats on that pc start on it. The pc owner's main also goes to the companion
+  in the answer to its report (`claude_main`): its workers run under it, and the worker cap and the limit chip follow
+  that account's usage.
+- **What is left:** a subscription reports usage per window (5 hours, week), not tokens; Machines shows per account a
+  bar of what is left of each window and when it is full again, the model chip the same as text, the chat head the
+  chat's account and what is left. Each account's windows come from its own workers and chat turns (the pc's own also
+  from an interactive Claude's status line). An API key has no balance the API lets it read
+  ([support](https://support.anthropic.com/en/articles/8977456-how-do-i-pay-for-my-api-usage)): the companion adds
+  up Claude Code's `total_cost_usd` of its chat turns and workers per month, and Budget… sets a monthly budget so the
+  page shows what is left of it.
+- **The pc's own sign-in:** the companion talks to the server with its own token, not with Claude's sign-in, so it
+  stays online when Claude is signed out. The owner signs it in again from the page (Sign in again, the same browser
+  way) and out (Sign out…, typed SIGN OUT: its terminal sessions, workers and chats on it stop until it signs in).
+- **Secrets on the server:** a code, token or key travels as a fixed remote action, refused while the pc is offline,
+  handed to the pc once and then replaced by "(hidden)" in the queue; it never shows on the page, in the audit log or
+  in the companion's activity.
+- **Not (yet):** Codex and agy accounts are not covered.
 
 ## Hook failures
 
