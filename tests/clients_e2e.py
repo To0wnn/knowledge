@@ -1217,7 +1217,8 @@ def _companion(tok: str, tmp: Path, project: Path, name: str = "Companion Usér"
     mid = _quiet(lambda: json.loads(call("GET", "/local/api/hello")[2]).get("machine", "")) if up else ""
     mcp = lambda args: http("POST", "/mcp", {"jsonrpc": "2.0", "id": 1, "method": "tools/call", "params": {"name": "knowledge_edit" if "old_string" in args else "knowledge_write",
                             "arguments": args}}, {"Authorization": f"Bearer {tok}", "Accept": "application/json, text/event-stream"})
-    argvs = lambda n=0: [c for c in recorded()[n:] if "argv" in c and c["argv"][0] in ("codex", "claude", "agy") and c["argv"][1:2] != ["app-server"]]
+    argvs = lambda n=0: [c for c in recorded()[n:] if "argv" in c and c["argv"][0] in ("codex", "claude", "agy") and c["argv"][1:2] != ["app-server"]
+                              and c["argv"][1:3] != ["auth", "status"]]  # reading limits or who is signed in starts no session
     ui = {"X-Knowledge-Proxy": "proxy-secret", "X-authentik-username": "alice", "X-Knowledge-UI": "1"}
     act = lambda action, args: http("POST", "/ui/api/machines/action", {"machine": mid, "action": action, "args": args}, ui)
     done = lambda: [a for a in next((r for r in machines() if r["id"] == mid), {}).get("actions", [])]
