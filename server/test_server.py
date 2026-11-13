@@ -3196,6 +3196,8 @@ def main():
         assert hints["knowledge_read"]["readOnlyHint"] and hints["knowledge_search"]["readOnlyHint"], hints["knowledge_read"]
         assert not hints["knowledge_write"]["readOnlyHint"] and hints["knowledge_delete"]["destructiveHint"], hints["knowledge_write"]
         assert all("readOnlyHint" in h for h in hints.values()), hints  # every tool says whether it only reads
+        loaded = {x["name"] for x in json.loads(body)["result"]["tools"] if (x.get("_meta") or {}).get("anthropic/alwaysLoad")}
+        assert loaded == {"knowledge_chat_title", "knowledge_read", "knowledge_search", "knowledge_semantic_search", "knowledge_edit"}, loaded
         names = {t["name"] for t in json.loads(body)["result"]["tools"]}
         assert {"knowledge_list", "knowledge_read", "knowledge_search", "knowledge_edit", "knowledge_write"} <= names, names
 

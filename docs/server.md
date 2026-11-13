@@ -73,6 +73,10 @@ the admin page to be given projects. `KNOWLEDGE_PROXY_IPS` are the addresses tru
   pushback"), which as a regex matches no line; until 13 Nov 2026 that was half of all empty searches, and the agent
   then grepped local files instead. Plain words (spaces, no regex characters) that match nothing now return
   `knowledge_semantic_search`'s hits under the `(no matches)` line; only that search logs a knowledge gap then.
+- **Tools loaded at once in Claude Code:** Claude Code defers MCP tools behind ToolSearch, and every session first
+  loaded the same few (3 to 4 ToolSearch calls per chat; Haiku repeated one select up to 6 times). The five tools every
+  session starts with (`knowledge_chat_title`, `_read`, `_search`, `_semantic_search`, `_edit`) carry
+  `_meta: {"anthropic/alwaysLoad": true}` (`ALWAYS_LOAD` in `server.py`); the rest stay deferred. Other agents ignore it.
 - **Clients** (`plugin/`): one folder that installs as a plugin in Claude Code, Codex and agy. It adds the MCP server,
   the session-start hook, a session log and a docs mirror for guest projects. Codex and agy reach the server through a
   small stdio relay, so the token never sits in a config file. `clients/knowledge-agent.py` sets everything up.

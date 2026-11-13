@@ -1051,6 +1051,9 @@ READ = ToolAnnotations(read_only_hint=True, open_world_hint=False)
 EDIT = ToolAnnotations(read_only_hint=False, destructive_hint=False, open_world_hint=False)
 REPLACE = ToolAnnotations(read_only_hint=False, destructive_hint=True, open_world_hint=False)
 FETCH = ToolAnnotations(read_only_hint=False, destructive_hint=False, open_world_hint=True)
+# Claude Code defers MCP tools behind ToolSearch; Haiku re-ran the same select up to 6 times before naming a chat (13 Nov
+# 2026). The tools every session starts with load at once; the rest stay deferred, so the prompt stays small.
+ALWAYS_LOAD = {"anthropic/alwaysLoad": True}
 
 PUBLIC_URL = os.environ.get("KNOWLEDGE_PUBLIC_URL", "").rstrip("/")  # how people reach this server; optional
 
@@ -1386,7 +1389,7 @@ def knowledge_chat_archive(chat: str = "", chat_id: str = "", id: str = "", forc
     return knowledge_chat_close(chat=chat, chat_id=chat_id, id=id, force=force, record=record, reason=reason, open=open)
 
 
-@server.tool(annotations=EDIT)
+@server.tool(annotations=EDIT, meta=ALWAYS_LOAD)
 def knowledge_chat_title(title: str, chat: str = "") -> str:
     """Name the web UI chat you run in: 3 to 6 words in the user's language saying what it works on (e.g. 'Clearer chat
     titles'), not their message. Call it at the start, with your first other tool call, and when the subject changes.
@@ -1406,7 +1409,7 @@ def knowledge_chat_title(title: str, chat: str = "") -> str:
     return f"Chat titled '{title}'."
 
 
-@server.tool(annotations=READ)
+@server.tool(annotations=READ, meta=ALWAYS_LOAD)
 def knowledge_read(path: str = "", file: str = "", name: str = "", offset: int = 1, limit: int = 600) -> str:
     """Read a shared text file, e.g. memory/MEMORY.md or homelab/diensten.md. Returns lines offset..offset+limit-1
     with line numbers, plus the file version needed by knowledge_write."""
@@ -1501,7 +1504,7 @@ REVOKED_TOKENS = ADMIN_DIR / "revoked_tokens.json"  # name -> what it was: who w
 SEARCH_SECONDS = 3
 
 
-@server.tool(annotations=READ)
+@server.tool(annotations=READ, meta=ALWAYS_LOAD)
 async def knowledge_search(pattern: str = "", query: str = "", search: str = "", text: str = "", root: str = "", max_results: int = 60, archive: bool = False) -> str:
     """Case-insensitive regex search over shared files (all roots, or one or more comma-separated roots, e.g.
     "trade,trade-memory"): one word or an exact phrase, alternatives as a|b. Returns path:line: text. Plain words
@@ -1573,7 +1576,7 @@ def search_lines(rx_i, rx_low, root: str, max_results: int, archive: bool = Fals
     return ("\n".join(out) or "(no matches)") + note
 
 
-@server.tool(annotations=EDIT)
+@server.tool(annotations=EDIT, meta=ALWAYS_LOAD)
 async def knowledge_edit(path: str = "", old_string: str = "", new_string: str = "", file: str = "", name: str = "") -> str:
     """Replace one unique snippet in a shared file (like the Edit tool). Edits by other sessions elsewhere in the
     file are kept. Fails if old_string is missing or not unique: read the file again and retry."""
@@ -2173,7 +2176,7 @@ async def knowledge_ingest(url: str = "", text: str = "", title: str = "") -> st
             f"<source_document path=\"{res['path']}\">\n{shown}\n</source_document>")
 
 
-@server.tool(annotations=READ)
+@server.tool(annotations=READ, meta=ALWAYS_LOAD)
 async def knowledge_semantic_search(query: str = "", pattern: str = "", search: str = "", text: str = "", root: str = "", limit: int = 10, archive: bool = False) -> str:
     """Search Markdown notes by meaning (synonyms, paraphrases, Dutch or English), for when knowledge_search (regex)
     finds nothing or you do not know the exact words. root: one or more comma-separated roots, e.g. "trade,trade-memory".
