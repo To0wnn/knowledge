@@ -1644,6 +1644,18 @@ def share_contract(tmp, ck, fr, raw, er, et):
         "a guest never; and the pc's own is never removed"
     queued = [a for a in json.loads(http("GET", "/machine/actions", token=fr, headers=pc)[1])["actions"]]
     assert [(a["action"], a["by"]) for a in queued][:2] == [("claude_token", "erin"), ("claude_remove", "erin")], queued
+    assert all(a["pc_owner"] is (a["by"] != "erin") for a in queued), "the pc checks an account's owner again (accounts.may)"
+    import server as srv  # a sign-in the pc never fetched leaves the queue file
+    real_q, srv.MACHINE_ACTIONS = srv.MACHINE_ACTIONS, tmp / "secret_queue.json"
+    try:
+        srv.MACHINE_ACTIONS.write_text(json.dumps({"m": [{"id": "a", "action": "claude_token", "args": {"account": "x", "token": tok}, "status": "waiting", "at": 1000},
+                                                         {"id": "b", "action": "claude_token", "args": {"account": "x", "token": tok}, "status": "waiting", "at": 1500},
+                                                         {"id": "c", "action": "restart", "args": {}, "status": "waiting", "at": 0}]}))
+        assert srv.expire_secret_actions(1000 + srv.SECRET_WAIT + 1) == 1
+        q = json.loads(srv.MACHINE_ACTIONS.read_text())["m"]
+        assert tok not in json.dumps(q[0]) and q[0]["status"] == "failed" and q[1]["args"]["token"] == tok and q[2]["status"] == "waiting", q
+    finally:
+        srv.MACHINE_ACTIONS = real_q
     for a in queued:
         http("POST", "/machine/actions/result", {"id": a["id"], "ok": True}, token=fr, headers=pc)
     main = lambda acc, h=ck: ui("/ui/api/machines/claude-main", {"machine": mid, "account": acc}, h)[0]

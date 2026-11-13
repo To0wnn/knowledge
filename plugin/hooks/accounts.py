@@ -284,11 +284,23 @@ def note(name: str, d: Path, **change):
         write(d / INFO, {**info(d), **change})
 
 
+def may(name: str, by: str, pc_owner: bool, remove: bool = False):
+    """The pc's own owner check of an action on account `name`, as the server's: the server only knows the accounts
+    the pc reported (a capped list, a minute late), so it lets an unknown name through as a new one."""
+    d = folder(name) if name else None
+    if d is None or not d.is_dir():
+        return
+    owner = info(d).get("by", "")
+    if not (owner and owner == by or pc_owner and (not owner or remove)):  # no owner: from before owners, the pc owner's
+        raise PermissionError(f"{name} is someone else's Claude account on this pc: pick another name")
+
+
 def login(name: str, wait: float = 30, by: str = "", setup: bool = False) -> str:
     """Start a browser sign-in for account `name` (made when new; "" signs the pc's own in again); the URL to open.
     The code goes in with code(). When `setup` is True, it runs `claude setup-token` in a pty to create a 1-year
     long-lived token directly; when False (default), it runs standard `claude auth login`."""
     d = where(name)
+    new = bool(name) and not d.is_dir()
     if name:
         sync(d)
     with LOCK:
@@ -342,6 +354,8 @@ def login(name: str, wait: float = 30, by: str = "", setup: bool = False) -> str
     if not rec["url"]:
         with LOCK:
             _drop(name)
+        if new:  # else it stays as an account without an owner: the pc owner's, and its name taken for whoever tried
+            remove(name)
         raise RuntimeError(f"claude {'setup-token' if setup else 'auth login'} gave no sign-in link: " + " ".join(rec["out"])[-200:])
     if name:
         write(d / INFO, {**owned(d, by), "kind": "token" if setup else "login", "error": ""})
@@ -367,17 +381,17 @@ def cancel(name: str) -> str:
     return f"{name or 'own'}: sign-in cancelled"
 
 
-def code(name: str, text: str, wait: float = 90) -> str:
+def code(name: str, text: str, wait: float = 90, by: str = "") -> str:
     """The code from the sign-in page into the waiting `claude setup-token` or `auth login`; who is signed in now."""
     clean = text.strip()
     if re.fullmatch(r"sk-ant-oat\d\d-[\w-]{20,400}", clean):
         with LOCK:
             _drop(name)
-        return set_secret(name, "token", clean)
+        return set_secret(name, "token", clean, by=by)
     if re.fullmatch(r"sk-ant-api\d\d-[\w-]{20,400}", clean):
         with LOCK:
             _drop(name)
-        return set_secret(name, "apikey", clean)
+        return set_secret(name, "apikey", clean, by=by)
 
     d = where(name)
     with LOCK:
@@ -643,7 +657,9 @@ def self_test():
         script.write_text(
             "import json, os, sys\n"
             "d = os.environ.get('CLAUDE_CONFIG_DIR', '')\n"
-            "if sys.argv[1:3] == ['auth', 'login']:\n"
+            "if sys.argv[1:3] == ['auth', 'login'] and d.endswith('broken'):\n"
+            "    print('Error: network'); sys.exit(1)\n"
+            "elif sys.argv[1:3] == ['auth', 'login']:\n"
             "    print('If the browser did not open, visit: https://claude.com/cai/oauth/authorize?code=true&state=x', flush=True)\n"
             "    print('Paste code here if prompted > ', end='', flush=True)\n"
             "    c = sys.stdin.readline().strip()\n"
@@ -673,6 +689,12 @@ def self_test():
             (fake / "claude").chmod(0o755)
         os.environ["PATH"] = str(fake) + os.pathsep + os.environ["PATH"]
         os.environ["CLAUDE_CONFIG_DIR"] = str(MAIN)  # the pc's own sign-in of this test: never the real ~/.claude
+        try:
+            login("broken", by="eve")
+            raise AssertionError("no link, no sign-in")
+        except RuntimeError as e:
+            assert "Error: network" in str(e), e
+        assert "broken" not in names(), "a failed first sign-in leaves no account without an owner"
         url = login("thuis")
         assert url == "https://claude.com/cai/oauth/authorize?code=true&state=x", url
         assert {a["id"]: a for a in listing()}["thuis"]["login"] == url, "the waiting link shows on the page"
@@ -773,6 +795,21 @@ def self_test():
         assert {a["id"]: a for a in listing()}["nieuw"]["by"] == "bob" and info(folder("nieuw"))["by"] == "bob"
         set_secret("nieuw", "token", tok, by="eve")
         assert info(folder("nieuw"))["by"] == "bob", "who added an account stays its owner"
+        may("nieuw", "bob", False) or may("nieuw", "alice", True, remove=True) or may("brandnew", "eve", False)
+        for who, owner_pc, rm in (("eve", False, True), ("alice", True, False)):
+            try:
+                may("nieuw", who, owner_pc, remove=rm)
+                raise AssertionError(f"{who} must not touch bob's account")
+            except PermissionError:
+                pass
+        set_secret("nieuw", "token", tok, by="")
+        (folder("nieuw") / INFO).write_text(json.dumps({k: v for k, v in info(folder("nieuw")).items() if k != "by"}))
+        may("nieuw", "alice", True)  # from before owners were kept: the pc owner's
+        try:
+            may("nieuw", "eve", False)
+            raise AssertionError("a guest takes no ownerless account over")
+        except PermissionError:
+            pass
         remove("nieuw")
         # removing keeps everything the links point to
         assert remove("werk") == "werk: removed" and remove("thuis") == "thuis: removed"

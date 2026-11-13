@@ -4717,6 +4717,11 @@ def stalled_loop():
             BACKGROUND["tasks"] = {"at": time.time(), "error": f"stalled-task check failed: {e}"}
             print(f"stalled-task check failed: {e}", flush=True)
         try:
+            expire_secret_actions(time.time())
+        except Exception as e:
+            BACKGROUND["secrets"] = {"at": time.time(), "error": f"secret action expiry failed: {e}"}
+            print(BACKGROUND["secrets"]["error"], flush=True)
+        try:
             needs_check(time.time())
         except Exception as e:
             BACKGROUND["needs"] = {"at": time.time(), "error": f"'Needs you' check failed: {e}"}
@@ -6652,10 +6657,29 @@ def hide_secrets(args: dict) -> dict:
     return {k: "(hidden)" if k in SECRET_ARGS else v for k, v in args.items()}
 
 
+SECRET_WAIT = 600  # a sign-in a pc did not fetch by then is dropped: a token never waits days in the queue file
+
+
+def expire_secret_actions(now: float) -> int:
+    """Drop the secret of every waiting action older than SECRET_WAIT (the pc went away right after the click)."""
+    gone = []
+
+    def change(d):
+        for acts in d.values():
+            for a in acts:
+                if a.get("status") == "waiting" and any(k in a.get("args", {}) for k in SECRET_ARGS) and now - a.get("at", 0) > SECRET_WAIT:
+                    a.update(status="failed", args=hide_secrets(a["args"]), result="the pc did not fetch the sign-in in time: try again", done_at=now)
+                    gone.append(a["id"])
+    if any(a.get("status") == "waiting" and any(k in a.get("args", {}) for k in SECRET_ARGS) and now - a.get("at", 0) > SECRET_WAIT
+           for acts in read_json(MACHINE_ACTIONS, {}).values() for a in acts):  # read first: no write while nothing waits
+        update_state(MACHINE_ACTIONS, change)
+    return len(gone)
+
+
 def report_accounts(v) -> list:
     """The Claude accounts a pc reported (accounts.py listing): the default one ("" id) and its extra ones."""
     out = []
-    for a in (v if isinstance(v, list) else [])[:10]:
+    for a in (v if isinstance(v, list) else [])[:100]:  # 10 once hid a pc owner's accounts behind a guest's
         if not isinstance(a, dict) or not (a.get("id") == "" or CLAUDE_ACCOUNT.fullmatch(str(a.get("id", "")))):
             continue
         login = str(a.get("login") or "")
@@ -6872,7 +6896,8 @@ async def ui_machine_action(request: Request):
     if any(k in args for k in SECRET_ARGS) and not row["online"]:  # it would wait in the queue file until the pc comes back
         return JSONResponse({"error": f"{row['label']} is offline: sign in once it is online"}, status_code=409)
     item = {"id": secrets.token_hex(6), "action": action, "args": args, "by": dev.get("user", ""), "at": time.time(),
-            "status": "waiting", "tokens": by_owner or [n for n in row["tokens"] if steer(n)]}  # a guest's row lists no tokens
+            "status": "waiting", "tokens": by_owner or [n for n in row["tokens"] if steer(n)],  # a guest's row lists no tokens
+            "pc_owner": bool(row["own"])}  # the companion checks an account's owner again (accounts.may)
     await asyncio.to_thread(update_state, MACHINE_ACTIONS, lambda d: d.__setitem__(mid, (d.get(mid, []) + [item])[-50:]))
     wake_machine(mid)
     audit("machine-action", f"{mid} {action} {json.dumps(hide_secrets(args))}")
@@ -6927,7 +6952,7 @@ async def machine_actions_route(request: Request):
     def change(d):
         for a in mine(d):
             a["status"] = "running"
-            out.append({k: a[k] for k in ("id", "action", "args", "by", "at")})
+            out.append({k: a[k] for k in ("id", "action", "args", "by", "at", "pc_owner") if k in a})
             a["args"] = hide_secrets(a["args"])  # handed out: the pc has it, the queue file no longer
     await asyncio.to_thread(mark_machine, dev)
     end, wake = time.time() + wait, MACHINE_WAKE.setdefault(dev["machine"], asyncio.Event())
