@@ -503,10 +503,40 @@ body.admin-page { display: block; overflow-y: auto; }
 .mx-agent-name small { font-weight: 500; font-size: 12px; }
 .mx-mark { display: grid; place-items: center; width: 24px; height: 24px; border-radius: 6px; background: var(--act); color: var(--on-act); font-size: 12px; font-weight: 800; }
 .mx-theirs .mx-mark { background: var(--muted); }
-.mx-meters { grid-column: 2 / -2; display: flex; gap: 26px; flex-wrap: wrap; align-items: center; }
+.mx-meters { grid-column: 2 / -2; display: flex; gap: 16px; flex-wrap: wrap; align-items: center; }
 .mx-meter { flex: 1 1 200px; max-width: 300px; }
 .mx-meter-lab { display: flex; justify-content: space-between; color: var(--muted); font-size: 12px; }
 .mx-meter-lab b { color: var(--ink); font-size: 13px; }
+.mx-meter-group {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  padding: 8px 12px;
+  border: 1px solid var(--line);
+  border-radius: var(--r-md);
+  background: var(--panel-hi);
+  flex: 1 1 240px;
+  max-width: 440px;
+}
+.mx-meter-group-head {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 12px;
+  color: var(--ink);
+}
+.mx-meter-group-head b { font-size: 13px; }
+.mx-meter-group-head .pill { font-size: 11px; line-height: 16px; padding: 0 5px; }
+.mx-meter-group-bars {
+  display: flex;
+  gap: 12px;
+  flex-wrap: wrap;
+}
+.mx-meter-group-bars .mx-meter {
+  flex: 1 1 110px;
+  min-width: 100px;
+  max-width: none;
+}
 .mx-track { height: 8px; margin-top: 3px; border-radius: 4px; background: var(--line); overflow: hidden; }
 .mx-track i { display: block; height: 100%; border-radius: 4px; background: var(--act); }
 .mx-stat { max-width: 280px; }

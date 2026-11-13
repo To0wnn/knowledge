@@ -1715,9 +1715,8 @@ function usageWindows(ag) {
 // "7d 82% · 5h 12%"; agy names each group once: "Gemini 7d 25% · 5h 57% · Claude/GPT 7d 0% · 5h 0%"
 const usageText = (ag) => usageWindows(ag).map(([p, n], i, all) =>
   `${i && usageGroup(all[i - 1][1]) === usageGroup(n) ? usageSpan(n) || n : n} ${Math.round(p)}%`).join(" · ") || `${Math.round(ag.limit)}%`;
-// What is left of a Claude account (Machines, the model chip): a subscription per usage window ("5h 62% left · full
-// 17:40"), an API key what is left of its monthly budget, or without one what it spent this month (the API has no
-// balance a key can read).
+// Usage of a Claude account (Machines, the model chip): a subscription per usage window ("5h 38% · resets 17:40"),
+// an API key what it spent this month and its budget (the API has no balance a key can read).
 const leftWhen = (t) => new Date(t * 1000).toLocaleString("en-GB", t - Date.now() / 1000 > 86400 ? { weekday: "short", hour: "2-digit", minute: "2-digit" } : { hour: "2-digit", minute: "2-digit" }).replace(",", "");
 function accountTiming(a) {
   if (a.pc) return "";
@@ -1735,20 +1734,21 @@ function accountTiming(a) {
   }
   return parts.join(" · ");
 }
-function accountLeft(a) {
-  if (a.kind === "apikey") return a.budget ? `$${Math.max(0, a.budget - (a.spent || 0)).toFixed(2)} left of $${a.budget}` : `$${(a.spent || 0).toFixed(2)} spent this month`;
-  return usageWindows(a).map(([p, n, r]) => `${usageSpan(n) || n} ${Math.max(0, 100 - Math.round(p))}% left${r ? ` · full ${leftWhen(r)}` : ""}`).join(" · ");
+function accountUsage(a) {
+  if (a.kind === "apikey") return a.budget ? `$${(a.spent || 0).toFixed(2)} of $${a.budget} (${Math.round(((a.spent || 0) / a.budget) * 100)}%)` : `$${(a.spent || 0).toFixed(2)} spent this month`;
+  return usageWindows(a).map(([p, n, r]) => `${usageSpan(n) || n} ${Math.round(p)}%${r ? ` · resets ${leftWhen(r)}` : ""}`).join(" · ");
 }
-// The same as small bars of what is left (an empty bar is used up), one per window or for the budget.
+const accountLeft = accountUsage;
+// The same as small bars of what is used (0% empty -> 100% full), one per window or for the budget.
 function accountBars(a) {
-  const box = el("span", "acc-bars"), bar = (left, label) => {
+  const box = el("span", "acc-bars"), bar = (pct, label) => {
     const t = el("span", "mx-track acc-bar"), fill = el("i");
-    fill.style.width = `${Math.min(100, Math.max(0, left))}%`; if (left <= 20) fill.className = left <= 5 ? "bad" : "warn";
+    fill.style.width = `${Math.min(100, Math.max(0, pct))}%`; if (pct >= 80) fill.className = pct >= 95 ? "bad" : "warn";
     t.append(fill); t.setAttribute("role", "img"); t.setAttribute("aria-label", label); t.title = label; box.append(t);
   };
-  if (a.kind === "apikey") { if (a.budget) bar(100 * (1 - (a.spent || 0) / a.budget), accountLeft(a)); }
-  else for (const [p, n, r] of usageWindows(a)) bar(100 - p, `${usageSpan(n) || n}: ${Math.max(0, 100 - Math.round(p))}% left${r ? `, full ${leftWhen(r)}` : ""}`);
-  const text = accountLeft(a);
+  if (a.kind === "apikey") { if (a.budget) bar(Math.min(100, Math.max(0, ((a.spent || 0) / a.budget) * 100)), accountUsage(a)); }
+  else for (const [p, n, r] of usageWindows(a)) bar(p, `${usageSpan(n) || n}: ${Math.round(p)}% used${r ? `, resets ${leftWhen(r)}` : ""}`);
+  const text = accountUsage(a);
   if (text) box.append(el("small", "muted", text));
   return box;
 }

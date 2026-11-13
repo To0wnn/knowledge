@@ -777,7 +777,7 @@ async def cockpit_shell(browser, devices, secret: str) -> None:
                 await pg.locator("#ck-canvas .ck-model-list").screenshot(path=os.path.join(os.environ["KNOWLEDGE_SMOKE_SHOTS"], "chat-accounts.png"))
             left = await pg.evaluate("[...document.querySelectorAll('#ck-canvas .ck-account button small')].map((x) => x.textContent)")
             await pg.mouse.click(5, 5)
-            check(any("% left" in x for x in left), f"model chip: each account says what is left of it {left}")
+            check(any("%" in x for x in left), f"model chip: each account says its usage {left}")
             await pg.mouse.click(5, 5)
     else:
         print("skip: no pc reports its models: the model chip is not checked")
@@ -863,10 +863,10 @@ async def shell(browser, devices, secret: str) -> None:
         check(acc[0][0].startswith("own") and any("long-lived token" in a for a in acc[0]) and acc[1] == ["https://claude.com/cai/oauth/authorize?code=true"],
               f"Machines: Claude accounts with the sign-in link of the one that waits {acc}")
         work = next(a for a in acc[0] if a.startswith("work"))
-        check("60% left" in work and "Make main" in work and "$" not in work, f"Machines: an account shows what is left of it, and Make main {work}")
+        check("40%" in work and "Make main" in work and "$" not in work, f"Machines: an account shows its usage, and Make main {work}")
         api = next((a for a in acc[0] if a.startswith("cloud")), "")
-        check("$7.50 left of $10" in api and "Budget" in api, f"Machines: an API key shows what is left of its budget {api}")
-        check(await pg.locator("#machines .mx-accounts .acc-bar").count() >= 2, "Machines: what is left shows as bars")
+        check("$2.50 of $10" in api and "Budget" in api, f"Machines: an API key shows its budget {api}")
+        check(await pg.locator("#machines .mx-accounts .acc-bar").count() >= 2, "Machines: what is used shows as bars")
         if os.environ.get("KNOWLEDGE_SMOKE_SHOTS"):
             await pg.locator("#machines .mx-accounts").first.screenshot(path=os.path.join(os.environ["KNOWLEDGE_SMOKE_SHOTS"], "machines-accounts.png"))
         await pg.locator("#machines .mx-accounts button", has_text="Add account").first.click()

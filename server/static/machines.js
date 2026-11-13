@@ -188,22 +188,101 @@ const val = (text, cls = "") => el("span", cls, text);
 const differs = (text) => val(text, "mx-diff"); // a value that is not like the others: the reason to look
 
 // Usage of one account: per window the fullest reading of these pcs. Usage belongs to the account, not to a pc.
+function renderMeter(pct, label, resets) {
+  const mt = el("div", "mx-meter"), lab = el("div", "mx-meter-lab"), track = el("div", "mx-track"), fill = el("i");
+  lab.append(el("span", null, label), el("b", null, `${Math.round(pct)}%`));
+  fill.style.width = `${Math.min(100, Math.max(0, pct))}%`; if (pct >= 80) fill.className = pct >= 95 ? "bad" : "warn";
+  track.append(fill); track.setAttribute("role", "img"); track.setAttribute("aria-label", `${label}: ${Math.round(pct)}% used`);
+  mt.append(lab, track);
+  if (resets) mt.append(el("div", "mx-meter-lab", `resets ${new Date(resets * 1000).toLocaleString("en-GB", resets - Date.now() / 1000 > 86400 ? { weekday: "short", day: "numeric", month: "short", hour: "2-digit", minute: "2-digit" } : { hour: "2-digit", minute: "2-digit" }).replace(",", "")}`));
+  return mt;
+}
 function meters(pcs, a) {
+  const box = el("div", "mx-meters");
+  if (a === "claude") {
+    const accMap = new Map();
+    for (const m of pcs) {
+      for (const acc of m.agents?.claude?.accounts || []) {
+        if (acc.mine === false) continue;
+        const id = acc.id || "";
+        if (!accMap.has(id)) accMap.set(id, { id, by: {}, isMain: false, email: "", plan: "", kind: acc.kind, budget: acc.budget, spent: acc.spent });
+        const rec = accMap.get(id);
+        if ((m.claudeMain || "") === id || acc.main) rec.isMain = true;
+        if (acc.email && !rec.email) rec.email = acc.email;
+        if (acc.plan && !rec.plan) rec.plan = acc.plan;
+        if (acc.budget && !rec.budget) rec.budget = acc.budget;
+        if (acc.spent != null) rec.spent = Math.max(rec.spent || 0, acc.spent);
+        for (const w of usageWindows(acc)) if (!rec.by[w[1]] || w[0] > rec.by[w[1]][0]) rec.by[w[1]] = w;
+      }
+    }
+    if (accMap.size > 1) {
+      for (const [id, acc] of accMap) {
+        const grp = el("div", "mx-meter-group"), head = el("div", "mx-meter-group-head");
+        head.append(el("b", null, id || "own"));
+        if (acc.isMain) {
+          const pill = el("span", "pill", "main");
+          pill.title = "Default account for workers and new chats on this pc";
+          head.append(pill);
+        }
+        if (acc.plan) head.append(el("small", "muted", acc.plan));
+        if (acc.email) head.append(el("small", "muted", acc.email));
+        grp.append(head);
+        const barsBox = el("div", "mx-meter-group-bars");
+        const wins = usageWindows({ windows: Object.values(acc.by) });
+        if (acc.kind === "apikey") {
+          if (acc.budget) {
+            const pct = Math.min(100, Math.max(0, ((acc.spent || 0) / acc.budget) * 100));
+            barsBox.append(renderMeter(pct, `Budget ($${(acc.spent || 0).toFixed(2)} of $${acc.budget})`, null));
+          } else {
+            barsBox.append(el("small", "muted", `$${(acc.spent || 0).toFixed(2)} spent this month`));
+          }
+        } else if (wins.length) {
+          for (const [pct, n, resets] of wins) {
+            const span = usageSpan(n) || n;
+            const label = span === "5h" ? "5 hours" : span === "7d" ? "This week" : span === "30d" ? "This month" : span;
+            barsBox.append(renderMeter(pct, label, resets));
+          }
+        } else {
+          barsBox.append(el("small", "muted", "Usage not known yet"));
+        }
+        grp.append(barsBox);
+        box.append(grp);
+      }
+      return box;
+    }
+  }
+
   const by = {};
   for (const m of pcs) for (const w of usageWindows(m.agents?.[a] || {})) if (!by[w[1]] || w[0] > by[w[1]][0]) by[w[1]] = w;
   const wins = usageWindows({ windows: Object.values(by) });
-  const box = el("div", "mx-meters");
   if (!wins.length) { box.append(val("Usage not known yet: it shows after a session or within 15 minutes.", "muted")); return box; }
-  // agy names a window after its model group: "Gemini 5h", "Claude/GPT 7d"
+
+  const groups = new Map();
+  for (const w of wins) {
+    const grp = usageGroup(w[1]) || "";
+    if (!groups.has(grp)) groups.set(grp, []);
+    groups.get(grp).push(w);
+  }
+  if (groups.size > 1) {
+    for (const [grpName, grpWins] of groups) {
+      const grp = el("div", "mx-meter-group"), head = el("div", "mx-meter-group-head");
+      head.append(el("b", null, grpName));
+      grp.append(head);
+      const barsBox = el("div", "mx-meter-group-bars");
+      for (const [pct, n, resets] of grpWins) {
+        const span = usageSpan(n) || n;
+        const label = span === "5h" ? "5 hours" : span === "7d" ? "This week" : span === "30d" ? "This month" : span;
+        barsBox.append(renderMeter(pct, label, resets));
+      }
+      grp.append(barsBox);
+      box.append(grp);
+    }
+    return box;
+  }
+
   const name = (n) => ({ "5h": "5 hours", "7d": "This week", "30d": "This month" }[n] || n.replace(/ 5h$/, " · 5 hours").replace(/ 7d$/, " · this week"));
   for (const [pct, n, resets] of wins) {
-    const mt = el("div", "mx-meter"), lab = el("div", "mx-meter-lab"), track = el("div", "mx-track"), fill = el("i");
-    lab.append(el("span", null, name(n)), el("b", null, `${Math.round(pct)}%`));
-    fill.style.width = `${Math.min(100, Math.max(0, pct))}%`; if (pct >= 80) fill.className = pct >= 95 ? "bad" : "warn";
-    track.append(fill); track.setAttribute("role", "img"); track.setAttribute("aria-label", `${name(n)}: ${Math.round(pct)}% used`);
-    mt.append(lab, track);
-    if (resets) mt.append(el("div", "mx-meter-lab", `resets ${new Date(resets * 1000).toLocaleString("en-GB", resets - Date.now() / 1000 > 86400 ? { weekday: "short", day: "numeric", month: "short", hour: "2-digit", minute: "2-digit" } : { hour: "2-digit", minute: "2-digit" }).replace(",", "")}`));
-    box.append(mt);
+    box.append(renderMeter(pct, name(n), resets));
   }
   return box;
 }
@@ -511,14 +590,18 @@ function accountsCell(m) {
       : kindLabel || "not signed in";
     line.append(el("b", null, x.id || "own"), " ", val(who, x.pc || x.email || x.kind ? "" : "mx-diff"));
     if (x.plan) line.append(" ", val(x.plan, "muted"));
-    if (mine && x.id === main) line.append(el("span", "pill", "main"));
+    if (mine && x.id === main) { const p = el("span", "pill", "main"); p.title = "Default account for workers and new chats on this pc"; line.append(p); }
     if (!mine) line.append(" ", val(`added by ${x.by || "?"}`, "muted"));
     const timing = accountTiming(x);
     if (timing) line.append(" ", val(timing, "muted"));
     if (!x.pc && (usageWindows(x).length || x.kind === "apikey")) line.append(accountBars(x));
     if (x.error) line.append(el("p", "machine-error", x.error));
     const acts = [];
-    if (steer && mine && x.id !== main) acts.push(actionButton("Make main", () => accountMain(m, x.id), "btn small quiet"));
+    if (steer && mine && x.id !== main) {
+      const b = actionButton("Make main", () => accountMain(m, x.id), "btn small quiet");
+      b.title = "Make default account for workers and new chats on this pc";
+      acts.push(b);
+    }
     const busy = pendingAction(m, "claude_login", (y) => y.account === x.id) || pendingAction(m, "claude_code", (y) => y.account === x.id);
     if (steer && mine && x.login) {
       const a = el("a", "btn small primary", "Open sign-in"); a.href = x.login; a.target = "_blank"; a.rel = "noopener noreferrer";

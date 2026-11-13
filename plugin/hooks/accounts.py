@@ -620,7 +620,7 @@ def self_test():
             "    c = sys.stdin.readline().strip()\n"
             "    if c != 'good#code':\n"
             "        print('Error: That code was not accepted.'); sys.exit(1)\n"
-            "    print('✓ Long-lived authentication token created successfully!\\nYour OAuth token (valid for 1 year):\\nsk-ant-oat01-0123456789abcdef0123456789abcdef0123456789\\n')\n"
+            "    print('Long-lived authentication token created successfully!\\nYour OAuth token (valid for 1 year):\\nsk-ant-oat01-0123456789abcdef0123456789abcdef0123456789\\n')\n"
             "elif sys.argv[1:3] == ['auth', 'status']:\n"
             "    ok = not d or os.path.exists(os.path.join(d, '.credentials.json'))  # no folder: the default account\n"
             "    print(json.dumps({'loggedIn': ok, 'email': 'w@example.org' if 'accounts' in d else 'me@example.org', 'planTier': 'max_5x'}))\n"
