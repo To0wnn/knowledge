@@ -1358,7 +1358,7 @@ function ckPicker(card) {
     const row = el("div", "ck-mrow ck-account"), seg = el("div", "ck-mopts"); // like the models: a name, what is left under it
     row.append(el("span", "ck-mfam", "Account"), seg);
     const own = ckAllAccounts(card).find((a) => a.id === "") || { id: "" }, main = ckAccPc(card)?.claudeMain || "";
-    for (const a of accountOrder([own, ...accounts], main)) {
+    for (const a of accountOrder([own, ...accounts], main).filter((a) => !accountGone(a, main) || (card.pick.account || "") === a.id && card.pick.accountSet)) {
       const b = el("button", "ck-mopt ck-acc", `${a.id || "own"}${a.id === main ? " (main)" : ""}`), left = a.pc ? "" : accountLeft(a); b.type = "button";
       if (left) b.append(el("small", null, left)); // what is left of it, at a glance
       const kindLabel = a.kind === "token" ? (a.preview ? `long-lived token (${a.preview})` : "long-lived token")

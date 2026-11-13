@@ -578,7 +578,9 @@ function accountsCell(m) {
   if (!ag) return null;
   if (!ag.accounts) return val(steersAgent(m, "claude") ? "Update the plugin to add accounts" : "—", "muted");
   const box = el("div", "mx-accounts"), steer = accountSteer(m), main = m.claudeMain || "";
+  const ownGone = ag.accounts.find((x) => accountGone(x, main) && !pendingAction(m, "claude_login", (y) => y.account === ""));
   for (const x of accountOrder(ag.accounts, main)) {
+    if (x === ownGone) continue;
     const line = el("div", "mx-account"), mine = x.mine !== false;
     // the pc's own on a token or key: chats and workers use that, the terminal keeps the sign-in shown beside it
     const kindLabel = x.kind === "token" ? (x.preview ? `long-lived token (${x.preview})` : "long-lived token")
@@ -670,6 +672,7 @@ function accountsCell(m) {
   if (steer) {
     const addRow = el("div", "mx-accounts-add");
     addRow.append(machineButton("+ Add account…", "Another Claude account on this pc, for your chats to pick", () => accountAdd(m), false, "btn small quiet"));
+    if (ownGone && (ownGone.mine !== false || m.own)) addRow.append(" ", machineButton("Sign this pc's own in…", "The pc's own Claude (~/.claude, also its terminal) is signed out", () => accountAdd(m, ""), false, "btn small quiet"));
     box.append(addRow);
   }
   return box;

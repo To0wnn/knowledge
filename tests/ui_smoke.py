@@ -861,6 +861,10 @@ async def shell(browser, devices, secret: str) -> None:
         forget: [...document.querySelectorAll('#machines .mx-c button')].some(b => /Forget/.test(b.textContent) && !b.closest('.menu-list'))})""")
     acc = await pg.evaluate("""[[...document.querySelectorAll('#machines .mx-account')].map((x) => x.textContent),
         [...document.querySelectorAll('#machines .mx-account a.btn')].map((a) => a.href)]""")
+    order = await pg.evaluate("""(() => { const l = [{id: ''}, {id: 'a', kind: 'login'}, {id: 'b'}, {id: 'rick', email: 'r@x'}];
+      return [accountOrder(l, 'rick').map((x) => x.id), accountGone(l[0], 'rick'), accountGone(l[0], ''), accountGone({id: '', email: 'e'}, 'rick'), accountUsage({id: 'b', windows: [[61, '7d', 0]]})]; })()""")
+    check(order == [["rick", "a", "", "b"], True, False, False, ""],
+          f"Accounts: main first, signed-out last and without old usage; a signed-out own one is hidden unless main {order}")
     if any("work" in a for a in acc[0]):  # the seeded pc (ui_ci): own sign-in, a token account, one waiting for its code
         check(acc[0][0].startswith("own") and any("long-lived token" in a for a in acc[0]) and acc[1] == ["https://claude.com/cai/oauth/authorize?code=true"],
               f"Machines: Claude accounts with the sign-in link of the one that waits {acc}")
