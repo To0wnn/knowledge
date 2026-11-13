@@ -265,7 +265,7 @@ fixed remote actions and relays chats. Installing it is part of the client setup
   from an interactive Claude's status line). An API key has no balance the API lets it read
   ([support](https://support.anthropic.com/en/articles/8977456-how-do-i-pay-for-my-api-usage)): the companion adds
   up Claude Code's `total_cost_usd` of its chat turns and workers per month, and Budget… sets a monthly budget so the
-  page shows what is left of it.
+  page shows its usage and budget.
 - **Token type and validity:** Machines shows for each account what kind of sign-in or token it uses (browser sign-in,
   long-lived token, API key) with a safe preview of the token prefix and suffix (`sk-ant-oat01-…xxxx` or
   `sk-ant-api03-…xxxx`), and its validity ("expires in 28d", 1 year for long-lived tokens from `setup-token`, or

@@ -1883,6 +1883,24 @@ function ckLine(card, e) {
     return line;
   }
   const line = el("div", `ck-line ${e.kind}`, e.text);
+  if (e.kind === "error" && /rate[ -]?limit|quota|exceeded|429/i.test(e.text || "") && (card.pick?.agent || card.meta?.agent) === "claude") {
+    const all = ckAllAccounts(card);
+    const curr = card.pick?.account ?? card.meta?.account ?? "";
+    const other = all.find((a) => (a.id || "") !== curr);
+    if (other) {
+      const swBtn = el("button", "btn small quiet", `Switch to ${other.id || "own"}`);
+      swBtn.type = "button";
+      swBtn.style.marginLeft = "8px";
+      swBtn.title = `Switch this chat to the Claude account ${other.id || "own"}`;
+      swBtn.onclick = () => {
+        card.pick = { ...(card.pick || {}), agent: "claude", account: other.id, accountSet: true, touched: true };
+        ckPicker(card);
+        card.input.focus();
+        toast(`Switched to ${other.id || "own"}`);
+      };
+      line.append(swBtn);
+    }
+  }
   if (e.kind === "info" && (e.text || "").startsWith("Not archived:")) {
     card.failedWrap = true;
     const btn = el("button", "btn small bad", "Force archive");
