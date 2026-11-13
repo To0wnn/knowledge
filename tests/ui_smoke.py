@@ -2446,6 +2446,9 @@ async def grid_groups(browser, secret: str) -> None:
     box = "#bd .bd-card[data-id='000000000001'] textarea"
     await pg.locator(box).scroll_into_view_if_needed()
     await pg.fill(box, "typing here")
+    # the page settles first (a poll that lands right after the fill re-lays the grid out): the check is about the re-sort below
+    await pg.wait_for_function(f"""() => {{ const t = document.querySelector("{box}").closest('.bd-card').getBoundingClientRect().top, w = window.__still || (window.__still = {{t, at: Date.now()}});
+      if (w.t !== t) {{ window.__still = {{t, at: Date.now()}}; return false; }} return Date.now() - w.at > 500; }}""", polling=100, timeout=10000)
     top = await pg.evaluate(f"document.querySelector(\"{box}\").closest('.bd-card').getBoundingClientRect().top")  # the card: a failed poll's note moves the box inside it
     chats[0], chats[3] = {**chats[0], "raised": now + 1}, {**chats[3], "raised": now}  # ccc below the rest now, aaa stays
     chats[1] = {**chats[1], "raised": now + 9}
