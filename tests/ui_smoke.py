@@ -777,7 +777,7 @@ async def cockpit_shell(browser, devices, secret: str) -> None:
                 await pg.locator("#ck-canvas .ck-model-list").screenshot(path=os.path.join(os.environ["KNOWLEDGE_SMOKE_SHOTS"], "chat-accounts.png"))
             left = await pg.evaluate("[...document.querySelectorAll('#ck-canvas .ck-account button small')].map((x) => x.textContent)")
             await pg.mouse.click(5, 5)
-            check(any("% left" in x for x in left), f"model chip: each account says what is left of it {left}")
+            check(any("%" in x for x in left), f"model chip: each account says its usage {left}")
             await pg.mouse.click(5, 5)
     else:
         print("skip: no pc reports its models: the model chip is not checked")
@@ -863,10 +863,10 @@ async def shell(browser, devices, secret: str) -> None:
         check(acc[0][0].startswith("own") and any("long-lived token" in a for a in acc[0]) and acc[1] == ["https://claude.com/cai/oauth/authorize?code=true"],
               f"Machines: Claude accounts with the sign-in link of the one that waits {acc}")
         work = next(a for a in acc[0] if a.startswith("work"))
-        check("60% left" in work and "Make main" in work and "$" not in work, f"Machines: an account shows what is left of it, and Make main {work}")
+        check("40%" in work and "Make main" in work and "$" not in work, f"Machines: an account shows its usage, and Make main {work}")
         api = next((a for a in acc[0] if a.startswith("cloud")), "")
-        check("$7.50 left of $10" in api and "Budget" in api, f"Machines: an API key shows what is left of its budget {api}")
-        check(await pg.locator("#machines .mx-accounts .acc-bar").count() >= 2, "Machines: what is left shows as bars")
+        check("$2.50 of $10" in api and "Budget" in api, f"Machines: an API key shows its budget {api}")
+        check(await pg.locator("#machines .mx-accounts .acc-bar").count() >= 2, "Machines: what is used shows as bars")
         if os.environ.get("KNOWLEDGE_SMOKE_SHOTS"):
             await pg.locator("#machines .mx-accounts").first.screenshot(path=os.path.join(os.environ["KNOWLEDGE_SMOKE_SHOTS"], "machines-accounts.png"))
         await pg.locator("#machines .mx-accounts button", has_text="Add account").first.click()
@@ -1456,6 +1456,10 @@ async def board(browser, devices, secret: str) -> None:
     check(fr == '[[{"project":"","n":2,"shut":false}],[]]', f"Grid: together is one frame, nothing folded {fr}")
     fl = await pg.evaluate("""JSON.stringify(bdFlow([{machine: 'x', id: 'c', created: 3}, {machine: 'x', id: 'a', created: 1}, {machine: 'x', id: 'b', created: 2}, {machine: 'x', id: 'd', created: 4}], {'x/d': 1}, 2))""")
     check(fl == '{"x/d":1,"x/a":1,"x/b":2,"x/c":2}', f"Grid: overflow keeps a placed chat, fills part 1 with the oldest, the rest goes to part 2 {fl}")
+    red = await pg.evaluate("""JSON.stringify(bdFlow([{machine: 'x', id: 'c', created: 3}, {machine: 'x', id: 'a', created: 1}, {machine: 'x', id: 'b', created: 2}], {'x/d': 1, 'x/a': 1, 'x/b': 2, 'x/c': 2}, 2))""")
+    check(red == '{"x/a":1,"x/b":1,"x/c":2}', f"Grid: auto-reduce fills earlier parts when a chat closes {red}")
+    red2 = await pg.evaluate("""JSON.stringify(bdFlow([{machine: 'x', id: 'a', created: 1}, {machine: 'x', id: 'b', created: 2}], {'x/a': 1, 'x/b': 1, 'x/c': 2}, 2))""")
+    check(red2 == '{"x/a":1,"x/b":1}', f"Grid: auto-reduce shrinks to part 1 when all chats fit {red2}")
     th = await pg.evaluate("""(() => { const u = me.user; return [ckTheirs({by: 'someone-else'}), ckTheirs({by: u}), ckTheirs({rights: 'view'}), ckTheirs({rights: 'act'}), ckTheirs({kind: 'task', by: 'x'})].join(); })()""")
     check(th == "true,false,true,false,false", f"Only mine: another person's chat is theirs, a chat without a starter only when you may just view it {th}")
     await pg.wait_for_function("ck.summaryAt > 0", timeout=15000)
@@ -1504,8 +1508,8 @@ async def board(browser, devices, secret: str) -> None:
         {col: 'done', kind: 'task', machine: 'x', id: 'u', project: 'q', key: 'task:q/u'}, {col: 'needs', kind: 'worker', machine: 'x', id: 'w', project: 'p', key: 'worker:x/p/w'}];
       bdLink(); const out = [a.textContent, a.getAttribute('aria-label'), bdNeeds().map((i) => i.id).join(',')];
       ck.board = []; bdLink(); out.push(a.textContent); [ck.board, agentProject] = keep; bdLink(); return out; })()""")
-    check(count == ["List1", "List, 1 in other projects needs you", "t", "List"],
-          f"Grid: the strip holds what needs you here without a chat card (no worker: its own strip), the List link counts the other projects {count}")
+    check(count == ["List2", "List, 2 items need you", "t", "List"],
+          f"Grid: the List link counts what needs you in scope {count}")
     cards = await pg.evaluate("""(() => { const keep = me.writable; me.writable = [...(me.writable || []), 'p'];
       const base = { col: 'needs', kind: 'task', project: 'p', path: 'p-memory/x.md', at: 0, sig: 's' };
       const ask = ckItem({ ...base, id: 'A-1', key: 'task:p/A-1', title: 'A-1 · short', line: 'waits for your approval', approve: true, owner: 'Codex',
@@ -1564,6 +1568,8 @@ async def board(browser, devices, secret: str) -> None:
         await pill.wait_for(state="hidden", timeout=2000)
         check(True, "Grid: Ctrl+End jumps in the card you point at")
         await pg.evaluate(tall, "")
+        check(await pg.evaluate("getComputedStyle($('bd-stage')).overflowY === 'hidden'"), "Grid: stage has overflow hidden when fitting viewport")
+        check(await pg.evaluate("getComputedStyle([...bd.wraps.values()][0].querySelector('.ck-log')).overflowY === 'auto'"), "Grid: card log always has overflow auto")
         await pg.evaluate("[...bd.wraps.values()][0].focus()")
         await pg.keyboard.press("Escape")
         check(await pg.evaluate("document.activeElement === $('bd-stage') && !ck.view"), "Grid: Esc leaves a focused card for the grid")
@@ -2574,6 +2580,10 @@ async def grid_groups(browser, secret: str) -> None:
     await pg.evaluate("me.prefs.grid_per_part = '2'; bdPartShow(1)")
     got = await pg.evaluate(f"[{cards}.split(',').filter(Boolean).length, $('bd-parts').children.length, Object.values(bdParts()).sort().join()]")
     check(got == [2, 3, "1,1,2,2"], f"Parts: with 2 per part the other chats overflow to part 2, its button appears {got}")
+    const_keep = await pg.evaluate("(() => { const k = ck.chats; ck.chats = ck.chats.slice(0, 2); bdRender(); return k; })()")
+    got_red = await pg.evaluate(f"[{cards}.split(',').filter(Boolean).length, $('bd-parts').children.length, Object.values(bdParts()).sort().join()]")
+    check(got_red == [2, 0, "1,1"], f"Parts: auto-reduce shrinks back to 1 part when chats drop to limit {got_red}")
+    await pg.evaluate("ck.chats = " + json.dumps(const_keep) + "; bdRender()")
     await pg.evaluate("me.prefs.grid_per_part = 'off'; store.set('kn_parts', '{}'); bdPartShow(0)")  # as Settings does
     await pg.wait_for_function(f"{cards} === '1,2,3,4' && store.get('kn_parts') === '{{}}'", timeout=5000)
     await pg.evaluate("me.prefs.grid_group = 'together'; store.set('kn_board', JSON.stringify({shut: ['bbb']})); bdRender()")

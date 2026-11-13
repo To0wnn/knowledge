@@ -76,6 +76,7 @@ async function ckSummary() {
     return c;
   });
   $("ck-resets").replaceChildren(...chips); $("ck-resets").hidden = !chips.length;
+  ckScopeRender();
   for (const [k, card] of ck.cards) {
     if (card.worker) {
       const hit = ckFindWorker(`worker/${card.worker}`);
@@ -171,6 +172,7 @@ function ckGetStarted() {
 }
 function ckList() {
   const box = $("ck-list"), hist = $("ck-history"), side = $("ck-side");
+  ckScopeRender();
   // a half-typed reply or reason, or an open menu, outlives the refresh: the list waits until it is sent or closed
   if (side.querySelector(".ck-reply, .ck-answer, .ck-snooze[open]") || selecting(side)) return;
   const had = side.contains(document.activeElement) && document.activeElement.dataset.row;
@@ -577,6 +579,7 @@ function ckItem(i) {
   if (i.kind === "chat" && chat?.sub_list?.length) card.append(ckItemSubs(chat));
   return card;
 }
+function ckScopeRender() { const slot = $("ck-scope-slot"); if (slot) slot.replaceChildren(ckScopeSwitch()); }
 // Needs you: only your own task lines and results, or everyone's in your projects (a shared project has the others'
 // too). "Only mine" needs the names task lines give you: asked once, then saved in Settings (task_names).
 function ckScopeSwitch() {
@@ -1358,7 +1361,13 @@ function ckPicker(card) {
     for (const a of [own, ...accounts]) {
       const b = el("button", "ck-mopt ck-acc", `${a.id || "own"}${a.id === main ? " (main)" : ""}`), left = a.pc ? "" : accountLeft(a); b.type = "button";
       if (left) b.append(el("small", null, left)); // what is left of it, at a glance
-      b.title = a.id ? a.email || ({ token: "long-lived token", apikey: "API key" })[a.kind] || "not signed in" : a.pc ? "The pc's own Claude sign-in (its owner's)" : a.email || "The pc's own Claude sign-in";
+      const kindLabel = a.kind === "token" ? (a.preview ? `long-lived token (${a.preview})` : "long-lived token")
+        : a.kind === "apikey" ? (a.preview ? `API key (${a.preview})` : "API key")
+        : a.kind === "login" ? "browser sign-in" : "";
+      const desc = a.pc ? "The pc's own Claude sign-in (its owner's)"
+        : [a.id || "own", a.email, kindLabel, a.plan].filter(Boolean).join(" · ") || "not signed in";
+      const timing = a.pc ? "" : accountTiming(a);
+      b.title = [desc, timing].filter(Boolean).join(" — ");
       b.setAttribute("aria-pressed", String((card.pick.account || "") === a.id));
       b.onclick = (e) => { e.stopPropagation(); card.pick = { ...card.pick, account: a.id, accountSet: true, touched: true }; ckPicker(card); };
       seg.append(b);
@@ -1874,6 +1883,24 @@ function ckLine(card, e) {
     return line;
   }
   const line = el("div", `ck-line ${e.kind}`, e.text);
+  if (e.kind === "error" && /rate[ -]?limit|quota|exceeded|429/i.test(e.text || "") && (card.pick?.agent || card.meta?.agent) === "claude") {
+    const all = ckAllAccounts(card);
+    const curr = card.pick?.account ?? card.meta?.account ?? "";
+    const other = all.find((a) => (a.id || "") !== curr);
+    if (other) {
+      const swBtn = el("button", "btn small quiet", `Switch to ${other.id || "own"}`);
+      swBtn.type = "button";
+      swBtn.style.marginLeft = "8px";
+      swBtn.title = `Switch this chat to the Claude account ${other.id || "own"}`;
+      swBtn.onclick = () => {
+        card.pick = { ...(card.pick || {}), agent: "claude", account: other.id, accountSet: true, touched: true };
+        ckPicker(card);
+        card.input.focus();
+        toast(`Switched to ${other.id || "own"}`);
+      };
+      line.append(swBtn);
+    }
+  }
   if (e.kind === "info" && (e.text || "").startsWith("Not archived:")) {
     card.failedWrap = true;
     const btn = el("button", "btn small bad", "Force archive");

@@ -188,22 +188,101 @@ const val = (text, cls = "") => el("span", cls, text);
 const differs = (text) => val(text, "mx-diff"); // a value that is not like the others: the reason to look
 
 // Usage of one account: per window the fullest reading of these pcs. Usage belongs to the account, not to a pc.
+function renderMeter(pct, label, resets) {
+  const mt = el("div", "mx-meter"), lab = el("div", "mx-meter-lab"), track = el("div", "mx-track"), fill = el("i");
+  lab.append(el("span", null, label), el("b", null, `${Math.round(pct)}%`));
+  fill.style.width = `${Math.min(100, Math.max(0, pct))}%`; if (pct >= 80) fill.className = pct >= 95 ? "bad" : "warn";
+  track.append(fill); track.setAttribute("role", "img"); track.setAttribute("aria-label", `${label}: ${Math.round(pct)}% used`);
+  mt.append(lab, track);
+  if (resets) mt.append(el("div", "mx-meter-lab", `resets ${new Date(resets * 1000).toLocaleString("en-GB", resets - Date.now() / 1000 > 86400 ? { weekday: "short", day: "numeric", month: "short", hour: "2-digit", minute: "2-digit" } : { hour: "2-digit", minute: "2-digit" }).replace(",", "")}`));
+  return mt;
+}
 function meters(pcs, a) {
+  const box = el("div", "mx-meters");
+  if (a === "claude") {
+    const accMap = new Map();
+    for (const m of pcs) {
+      for (const acc of m.agents?.claude?.accounts || []) {
+        if (acc.mine === false) continue;
+        const id = acc.id || "";
+        if (!accMap.has(id)) accMap.set(id, { id, by: {}, isMain: false, email: "", plan: "", kind: acc.kind, budget: acc.budget, spent: acc.spent });
+        const rec = accMap.get(id);
+        if ((m.claudeMain || "") === id || acc.main) rec.isMain = true;
+        if (acc.email && !rec.email) rec.email = acc.email;
+        if (acc.plan && !rec.plan) rec.plan = acc.plan;
+        if (acc.budget && !rec.budget) rec.budget = acc.budget;
+        if (acc.spent != null) rec.spent = Math.max(rec.spent || 0, acc.spent);
+        for (const w of usageWindows(acc)) if (!rec.by[w[1]] || w[0] > rec.by[w[1]][0]) rec.by[w[1]] = w;
+      }
+    }
+    if (accMap.size > 1) {
+      for (const [id, acc] of accMap) {
+        const grp = el("div", "mx-meter-group"), head = el("div", "mx-meter-group-head");
+        head.append(el("b", null, id || "own"));
+        if (acc.isMain) {
+          const pill = el("span", "pill", "main");
+          pill.title = "Default account for workers and new chats on this pc";
+          head.append(pill);
+        }
+        if (acc.plan) head.append(el("small", "muted", acc.plan));
+        if (acc.email) head.append(el("small", "muted", acc.email));
+        grp.append(head);
+        const barsBox = el("div", "mx-meter-group-bars");
+        const wins = usageWindows({ windows: Object.values(acc.by) });
+        if (acc.kind === "apikey") {
+          if (acc.budget) {
+            const pct = Math.min(100, Math.max(0, ((acc.spent || 0) / acc.budget) * 100));
+            barsBox.append(renderMeter(pct, `Budget ($${(acc.spent || 0).toFixed(2)} of $${acc.budget})`, null));
+          } else {
+            barsBox.append(el("small", "muted", `$${(acc.spent || 0).toFixed(2)} spent this month`));
+          }
+        } else if (wins.length) {
+          for (const [pct, n, resets] of wins) {
+            const span = usageSpan(n) || n;
+            const label = span === "5h" ? "5 hours" : span === "7d" ? "This week" : span === "30d" ? "This month" : span;
+            barsBox.append(renderMeter(pct, label, resets));
+          }
+        } else {
+          barsBox.append(el("small", "muted", "Usage not known yet"));
+        }
+        grp.append(barsBox);
+        box.append(grp);
+      }
+      return box;
+    }
+  }
+
   const by = {};
   for (const m of pcs) for (const w of usageWindows(m.agents?.[a] || {})) if (!by[w[1]] || w[0] > by[w[1]][0]) by[w[1]] = w;
   const wins = usageWindows({ windows: Object.values(by) });
-  const box = el("div", "mx-meters");
   if (!wins.length) { box.append(val("Usage not known yet: it shows after a session or within 15 minutes.", "muted")); return box; }
-  // agy names a window after its model group: "Gemini 5h", "Claude/GPT 7d"
+
+  const groups = new Map();
+  for (const w of wins) {
+    const grp = usageGroup(w[1]) || "";
+    if (!groups.has(grp)) groups.set(grp, []);
+    groups.get(grp).push(w);
+  }
+  if (groups.size > 1) {
+    for (const [grpName, grpWins] of groups) {
+      const grp = el("div", "mx-meter-group"), head = el("div", "mx-meter-group-head");
+      head.append(el("b", null, grpName));
+      grp.append(head);
+      const barsBox = el("div", "mx-meter-group-bars");
+      for (const [pct, n, resets] of grpWins) {
+        const span = usageSpan(n) || n;
+        const label = span === "5h" ? "5 hours" : span === "7d" ? "This week" : span === "30d" ? "This month" : span;
+        barsBox.append(renderMeter(pct, label, resets));
+      }
+      grp.append(barsBox);
+      box.append(grp);
+    }
+    return box;
+  }
+
   const name = (n) => ({ "5h": "5 hours", "7d": "This week", "30d": "This month" }[n] || n.replace(/ 5h$/, " · 5 hours").replace(/ 7d$/, " · this week"));
   for (const [pct, n, resets] of wins) {
-    const mt = el("div", "mx-meter"), lab = el("div", "mx-meter-lab"), track = el("div", "mx-track"), fill = el("i");
-    lab.append(el("span", null, name(n)), el("b", null, `${Math.round(pct)}%`));
-    fill.style.width = `${Math.min(100, Math.max(0, pct))}%`; if (pct >= 80) fill.className = pct >= 95 ? "bad" : "warn";
-    track.append(fill); track.setAttribute("role", "img"); track.setAttribute("aria-label", `${name(n)}: ${Math.round(pct)}% used`);
-    mt.append(lab, track);
-    if (resets) mt.append(el("div", "mx-meter-lab", `resets ${new Date(resets * 1000).toLocaleString("en-GB", resets - Date.now() / 1000 > 86400 ? { weekday: "short", day: "numeric", month: "short", hour: "2-digit", minute: "2-digit" } : { hour: "2-digit", minute: "2-digit" }).replace(",", "")}`));
-    box.append(mt);
+    box.append(renderMeter(pct, name(n), resets));
   }
   return box;
 }
@@ -502,31 +581,78 @@ function accountsCell(m) {
   for (const x of ag.accounts) {
     const line = el("div", "mx-account"), mine = x.mine !== false;
     // the pc's own on a token or key: chats and workers use that, the terminal keeps the sign-in shown beside it
-    const who = x.pc ? "this pc's own sign-in" : !x.id && x.kind ? `${ACCOUNT_KIND[x.kind]} for chats and workers${x.email ? ` (terminal: ${x.email})` : ""}`
-      : x.email || ACCOUNT_KIND[x.kind] || "not signed in";
-    line.append(el("b", null, x.id || "own"), " ", val(who, x.pc || x.email || ACCOUNT_KIND[x.kind] ? "" : "mx-diff"));
+    const kindLabel = x.kind === "token" ? (x.preview ? `long-lived token (${x.preview})` : "long-lived token")
+      : x.kind === "apikey" ? (x.preview ? `API key (${x.preview})` : "API key")
+      : x.kind === "login" ? "browser sign-in" : "";
+    const who = x.pc ? "this pc's own sign-in"
+      : !x.id && x.kind ? `${kindLabel} for chats and workers${x.email ? ` (terminal: ${x.email})` : ""}`
+      : x.email ? `${x.email}${kindLabel && x.kind !== "login" ? ` (${kindLabel})` : ""}`
+      : kindLabel || "not signed in";
+    line.append(el("b", null, x.id || "own"), " ", val(who, x.pc || x.email || x.kind ? "" : "mx-diff"));
     if (x.plan) line.append(" ", val(x.plan, "muted"));
-    if (mine && x.id === main) line.append(el("span", "pill", "main"));
+    if (mine && x.id === main) { const p = el("span", "pill", "main"); p.title = "Default account for workers and new chats on this pc"; line.append(p); }
     if (!mine) line.append(" ", val(`added by ${x.by || "?"}`, "muted"));
+    const timing = accountTiming(x);
+    if (timing) line.append(" ", val(timing, "muted"));
     if (!x.pc && (usageWindows(x).length || x.kind === "apikey")) line.append(accountBars(x));
     if (x.error) line.append(el("p", "machine-error", x.error));
     const acts = [];
-    if (steer && mine && x.id !== main) acts.push(actionButton("Make main", () => accountMain(m, x.id), "btn small quiet"));
+    if (steer && mine && x.id !== main) {
+      const b = actionButton("Make main", () => accountMain(m, x.id), "btn small quiet");
+      b.title = "Make default account for workers and new chats on this pc";
+      acts.push(b);
+    }
     const busy = pendingAction(m, "claude_login", (y) => y.account === x.id) || pendingAction(m, "claude_code", (y) => y.account === x.id);
     if (steer && mine && x.login) {
-      const a = el("a", "btn small", "Open sign-in"); a.href = x.login; a.target = "_blank"; a.rel = "noopener noreferrer";
+      const a = el("a", "btn small primary", "Open sign-in"); a.href = x.login; a.target = "_blank"; a.rel = "noopener noreferrer";
       a.title = "Sign in with the account in a new tab; claude.com then shows a code to paste here";
-      acts.push(a, machineButton("Paste code…", "The code the sign-in page showed", () => accountCode(m, x.id), busy));
-    } else if (steer && mine && x.id) {
-      acts.push(machineButton(x.kind ? "Change sign-in…" : "Sign in…", `Sign ${x.id} in: browser, long-lived token or API key`, () => accountAdd(m, x.id),
-        busy || pendingAction(m, "claude_token", (y) => y.account === x.id) || pendingAction(m, "claude_key", (y) => y.account === x.id)));
-    } else if (steer && x.id === "" && m.own) { // the pc's own: the companion stays online, so it signs in again from here
-      acts.push(machineButton(x.email || x.kind ? "Change sign-in…" : "Sign in…", "This pc's own Claude: browser sign-in, or a long-lived token or API key behind it",
-        () => accountAdd(m, ""), busy || pendingAction(m, "claude_token", (y) => y.account === "") || pendingAction(m, "claude_key", (y) => y.account === "")));
-      if (x.email) acts.push(machineButton("Sign out…", "Sign this pc's own Claude out", () => {
-        const word = prompt(`Sign ${m.label}'s own Claude out? Its terminal sessions, workers and chats on it stop until it signs in again (Sign in here). Type SIGN OUT to go on.`);
-        return word === "SIGN OUT" ? machineAction(m, "claude_logout", { account: "", confirm: word }) : null;
-      }, pendingAction(m, "claude_logout"), "btn small quiet"));
+
+      const inp = el("input"); inp.placeholder = "code or token"; inp.autocomplete = "off";
+      inp.className = "input small"; inp.style.minWidth = "170px"; inp.setAttribute("aria-label", "Code or token from sign-in");
+
+      const confirmBtn = machineButton("Confirm", "Save this code or token", () => {
+        const val = inp.value.trim();
+        if (!val) return;
+        if (/^sk-ant-oat\d\d-[\w-]{20,400}$/.test(val)) return machineAction(m, "claude_token", { account: x.id, token: val });
+        if (/^sk-ant-api\d\d-[\w-]{20,400}$/.test(val)) return machineAction(m, "claude_key", { account: x.id, key: val });
+        return machineAction(m, "claude_code", { account: x.id, code: val });
+      }, busy);
+
+      inp.onkeydown = (e) => { if (e.key === "Enter") { e.preventDefault(); confirmBtn.click(); } };
+
+      const restartBtn = machineButton(x.setup ? "Switch to long-lived token…" : "Sign in again", "Restart the sign-in procedure",
+        () => machineAction(m, "claude_login", { account: x.id, setup: !!x.setup }), busy, "btn small quiet");
+
+      acts.push(a, inp, confirmBtn, restartBtn);
+    } else if (steer && (mine || (x.id === "" && m.own))) {
+      const isLogin = !x.kind || x.kind === "login";
+      const isSigned = x.email || x.kind;
+      if (isLogin && isSigned) {
+        acts.push(machineButton("Switch to long-lived token…", `Start long-lived token setup for ${x.id || "this pc's own"} (valid 1 year)`,
+          () => machineAction(m, "claude_login", { account: x.id, setup: true }),
+          busy || pendingAction(m, "claude_token", (y) => y.account === x.id) || pendingAction(m, "claude_key", (y) => y.account === x.id)));
+        acts.push(machineButton("Change sign-in…", `Change sign-in: token, API key or new browser sign-in`,
+          () => accountAdd(m, x.id), busy, "btn small quiet"));
+      } else if (x.kind === "token") {
+        acts.push(machineButton("Switch to browser sign-in…", `Switch ${x.id || "this pc's own"} back to standard browser sign-in`,
+          () => machineAction(m, "claude_login", { account: x.id, setup: false }),
+          busy || pendingAction(m, "claude_token", (y) => y.account === x.id) || pendingAction(m, "claude_key", (y) => y.account === x.id)));
+        acts.push(machineButton("Change sign-in…", `Change sign-in: new token or API key`,
+          () => accountAdd(m, x.id), busy, "btn small quiet"));
+      } else if (!isSigned) {
+        acts.push(machineButton("Sign in…", `Sign ${x.id || "this pc's own"} in: browser, long-lived token or API key`,
+          () => accountAdd(m, x.id), busy));
+      } else {
+        acts.push(machineButton("Change sign-in…", `Change sign-in for ${x.id || "this pc's own"}`,
+          () => accountAdd(m, x.id), busy));
+      }
+
+      if (x.id === "" && x.email) {
+        acts.push(machineButton("Sign out…", "Sign this pc's own Claude out", () => {
+          const word = prompt(`Sign ${m.label}'s own Claude out? Its terminal sessions, workers and chats on it stop until it signs in again (Sign in here). Type SIGN OUT to go on.`);
+          return word === "SIGN OUT" ? machineAction(m, "claude_logout", { account: "", confirm: word }) : null;
+        }, pendingAction(m, "claude_logout"), "btn small quiet"));
+      }
     }
     if (steer && mine && x.kind === "apikey") acts.push(machineButton("Budget…", "A monthly budget: the page shows what is left of it", () => {
       const v = prompt(`Monthly budget for ${x.id || "this pc's own"} in dollars (0: none)`, x.budget || "");
@@ -537,7 +663,11 @@ function accountsCell(m) {
     if (acts.length) { const row = el("div", "mx-pop-acts"); row.append(...acts); line.append(row); }
     box.append(line);
   }
-  if (steer) box.append(machineButton("Add account…", "Another Claude account on this pc, for your chats to pick", () => accountAdd(m)));
+  if (steer) {
+    const addRow = el("div", "mx-accounts-add");
+    addRow.append(machineButton("+ Add account…", "Another Claude account on this pc, for your chats to pick", () => accountAdd(m), false, "btn small quiet"));
+    box.append(addRow);
+  }
   return box;
 }
 // A small form in a dialog (it is not redrawn with the list, so what is typed stays); done once closed or sent.
@@ -555,10 +685,10 @@ function accountForm(title, intro, fields, go, send) {
   document.body.append(d); d.showModal(); fields[0]?.[1].focus();
   return closed;
 }
-const ACCOUNT_KIND = { token: "long-lived token", apikey: "API key" };
+const ACCOUNT_KIND = { token: "long-lived token", apikey: "API key", login: "browser sign-in" };
 // How an account signs in: [value, button, what it is, what to paste (none: the browser), its form]
 const ACCOUNT_WAYS = [
-  ["login", "Browser", "Sign in with the account in your browser; claude.com then shows a code to paste here. Uses the account's subscription.", "", ""],
+  ["login", "Browser", "Sign in with the account in your browser; claude.com then shows a code to paste here. Standard subscription sign-in.", "", ""],
   ["token", "Long-lived token", "Run claude setup-token in a terminal on any pc and paste the token it prints. It holds for a year and uses the account's subscription.", "sk-ant-oat01-…", "sk-ant-oat\\d\\d-[\\w\\-]{20,400}"],
   ["apikey", "API key", "An API key from the Anthropic Console (console.anthropic.com > API keys). Billed per use, not the subscription.", "sk-ant-api03-…", "sk-ant-api\\d\\d-[\\w\\-]{20,400}"]];
 function accountAdd(m, account = null) { // null: a new account; "": the pc's own; a name: that account
@@ -579,7 +709,7 @@ function accountAdd(m, account = null) { // null: a new account; "": the pc's ow
     : account === "" ? ["Browser signs ~/.claude itself in again (the terminal too). A long-lived token or API key runs this pc's chats and workers on it instead; the terminal keeps its own sign-in. Browser again drops the token or key."] : [];
   const shown = accountForm(account === "" ? `This pc's own Claude on ${m.label}` : account ? `Sign ${account} in on ${m.label}` : `Add a Claude account on ${m.label}`,
     [...intro, ways, about], [...(account === null ? [["Name", name]] : []), ["Token", secret]], account === null ? "Add" : "Sign in", () => (way[0] === "login"
-      ? machineAction(m, "claude_login", { account: name.value })
+      ? machineAction(m, "claude_login", { account: name.value, setup: false })
       : machineAction(m, way[0] === "token" ? "claude_token" : "claude_key", { account: name.value, [way[0] === "token" ? "token" : "key"]: secret.value.trim() })));
   pick(way);
   return shown;
@@ -587,8 +717,13 @@ function accountAdd(m, account = null) { // null: a new account; "": the pc's ow
 function accountCode(m, account) {
   const code = el("input");
   code.required = true; code.autocomplete = "off"; code.placeholder = "the code from the sign-in page";
-  return accountForm(`Sign ${account} in on ${m.label}`, ["Paste the code claude.com showed after you signed in."], [["Code", code]], "Sign in",
-    () => machineAction(m, "claude_code", { account, code: code.value.trim() }));
+  return accountForm(`Sign ${account} in on ${m.label}`, ["Paste the code claude.com showed after you signed in, or an sk-ant-oat... / sk-ant-api... secret."], [["Code", code]], "Sign in",
+    () => {
+      const val = code.value.trim();
+      if (/^sk-ant-oat\d\d-[\w-]{20,400}$/.test(val)) return machineAction(m, "claude_token", { account, token: val });
+      if (/^sk-ant-api\d\d-[\w-]{20,400}$/.test(val)) return machineAction(m, "claude_key", { account, key: val });
+      return machineAction(m, "claude_code", { account, code: val });
+    });
 }
 // A limit: a switch (off: no limit, sent as 0) and, when on, a number from 1 up (how many is the owner's choice).
 function limitControl(most, busy, aria, send) {

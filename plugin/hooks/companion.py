@@ -2179,7 +2179,7 @@ def run_action(a: dict) -> str:
         set_tool(tid, auto=args.get("on") is True)
         return f"{tools.catalog()[tid]['name']}: daily update {'on' if args.get('on') is True else 'off'}"
     if act == "claude_login":  # the sign-in link goes to the page with the next report
-        accounts.login(str(args.get("account", "")), by=str(a.get("by") or ""))
+        accounts.login(str(args.get("account", "")), by=str(a.get("by") or ""), setup=args.get("setup", True) is not False)
         return f"{args.get('account')}: open the sign-in link under Machines, then paste the code there"
     if act == "claude_code":
         return accounts.code(str(args.get("account", "")), str(args.get("code", "")))

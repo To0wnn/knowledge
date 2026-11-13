@@ -177,8 +177,42 @@ def command(*args) -> list:
     return cmd
 
 
+def parse_iso(ts) -> int:
+    try:
+        from datetime import datetime
+        return int(datetime.fromisoformat(str(ts).replace("Z", "+00:00")).timestamp())
+    except (ValueError, TypeError, OSError):
+        return 0
+
+
+def token_preview(val: str) -> str:
+    """A safe preview of a secret (the prefix and the last 4 characters, e.g. 'sk-ant-oat01-…7890'): never the secret itself."""
+    val = (val or "").strip()
+    if len(val) <= 12:
+        return ""
+    m = re.match(r"^(sk-ant-[a-z0-9]+-)", val)
+    pref = m.group(1) if m else val[:8]
+    return f"{pref}…{val[-4:]}"
+
+
+def file_time(p: Path) -> int:
+    try:
+        return int(p.stat().st_mtime)
+    except OSError:
+        return 0
+
+
+def secret_preview(d: Path, kind: str) -> str:
+    if kind not in SECRETS:
+        return ""
+    try:
+        return token_preview((d / SECRETS[kind][0]).read_text(encoding="utf-8").strip())
+    except OSError:
+        return ""
+
+
 def status(d: Path, fresh: bool = False) -> dict:
-    """{"email", "plan"} of the sign-in in folder d (`claude auth status`), kept for STATUS_TTL."""
+    """{"email", "plan", "expires"} of the sign-in in folder d (`claude auth status`), kept for STATUS_TTL."""
     at, got = _STATUS.get(str(d), (0, None))
     if got is not None and not fresh and time.time() - at < STATUS_TTL:
         return got
@@ -187,17 +221,35 @@ def status(d: Path, fresh: bool = False) -> dict:
         r = subprocess.run(command("auth", "status", "--json"), capture_output=True, text=True, timeout=30, encoding="utf-8",
                            env={**e, **({"CLAUDE_CONFIG_DIR": str(d)} if d != MAIN else {})})
         s = json.loads(r.stdout or "{}")
+        exp = parse_iso(s.get("loginExpiresAt")) if s.get("loginExpiresAt") else 0
         got = {"email": str(s.get("email") or "")[:120] if s.get("loggedIn") else "",
-               "plan": str(s.get("planTier") or s.get("subscriptionType") or "")[:40] if s.get("loggedIn") else ""}
+               "plan": str(s.get("planTier") or s.get("subscriptionType") or "")[:40] if s.get("loggedIn") else "",
+               "expires": exp}
     except (OSError, ValueError, subprocess.SubprocessError, RuntimeError, AttributeError):
-        got = got or {"email": "", "plan": ""}
+        got = got or {"email": "", "plan": "", "expires": 0}
+    if not got.get("expires"):
+        try:
+            creds = json.loads((d / ".credentials.json").read_text(encoding="utf-8"))
+            oauth = creds.get("claudeAiOauth") or {}
+            re_exp = oauth.get("refreshTokenExpiresAt") or oauth.get("expiresAt")
+            if re_exp and isinstance(re_exp, (int, float)):
+                got["expires"] = int(re_exp / 1000.0 if re_exp > 1e11 else re_exp)
+        except (OSError, ValueError):
+            pass
     _STATUS[str(d)] = (time.time(), got)
     return got
 
 
 def _drop(name: str):
     rec = LOGINS.pop(name, None)
-    if rec and rec["p"].poll() is None:
+    if not rec:
+        return
+    if "master" in rec:
+        try:
+            os.close(rec["master"])
+        except OSError:
+            pass
+    if rec["p"].poll() is None:
         if os.name == "nt":  # the .cmd shim's cmd.exe: its node child would go on
             subprocess.run(["taskkill", "/F", "/T", "/PID", str(rec["p"].pid)], capture_output=True, timeout=30,
                            creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0))
@@ -231,69 +283,134 @@ def note(name: str, d: Path, **change):
         write(d / INFO, {**info(d), **change})
 
 
-def login(name: str, wait: float = 30, by: str = "") -> str:
+def login(name: str, wait: float = 30, by: str = "", setup: bool = False) -> str:
     """Start a browser sign-in for account `name` (made when new; "" signs the pc's own in again); the URL to open.
-    The code goes in with code()."""
+    The code goes in with code(). When `setup` is True, it runs `claude setup-token` in a pty to create a 1-year
+    long-lived token directly; when False (default), it runs standard `claude auth login`."""
     d = where(name)
     if name:
         sync(d)
     with LOCK:
         _drop(name)
         e = run_env(name, d)
-        # BROWSER: a pc without a desktop session must not start one (xdg-open honours it); the page opens the link
-        p = subprocess.Popen(command("auth", "login", "--claudeai"), stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
-                             env={**e, "BROWSER": "true" if os.name != "nt" else e.get("BROWSER", "")},
-                             text=True, encoding="utf-8", errors="replace")
-        rec = LOGINS[name] = {"p": p, "url": "", "out": [], "at": time.time()}
+        cmd = command("setup-token") if setup else command("auth", "login", "--claudeai")
+        if setup and os.name != "nt":
+            import pty
+            master, slave = pty.openpty()
+            p = subprocess.Popen(cmd, stdin=slave, stdout=slave, stderr=slave,
+                                 env={**e, "BROWSER": "true"}, close_fds=True)
+            os.close(slave)
+            rec = LOGINS[name] = {"p": p, "master": master, "url": "", "out": [], "at": time.time(), "by": by, "setup": True}
 
-    def read():
-        for line in p.stdout:
-            rec["out"].append(line.rstrip())
-            if not rec["url"] and (m := URL.search(line)):
-                rec["url"] = m.group(0)
-    threading.Thread(target=read, daemon=True).start()
+            def read_pty():
+                while True:
+                    try:
+                        chunk = os.read(master, 1024)
+                        if not chunk:
+                            break
+                        for line in chunk.decode("utf-8", errors="replace").splitlines():
+                            rec["out"].append(line.rstrip())
+                            if not rec["url"] and (m := URL.search(line)):
+                                rec["url"] = m.group(0)
+                    except OSError:
+                        break
+            threading.Thread(target=read_pty, daemon=True).start()
+        else:
+            p = subprocess.Popen(cmd, stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
+                                 env={**e, "BROWSER": "true" if os.name != "nt" else e.get("BROWSER", "")},
+                                 text=True, encoding="utf-8", errors="replace")
+            rec = LOGINS[name] = {"p": p, "url": "", "out": [], "at": time.time(), "by": by, "setup": setup}
+
+            def read_pipe():
+                for line in p.stdout:
+                    rec["out"].append(line.rstrip())
+                    if not rec["url"] and (m := URL.search(line)):
+                        rec["url"] = m.group(0)
+            threading.Thread(target=read_pipe, daemon=True).start()
+
     end = time.time() + wait
-    while not rec["url"] and p.poll() is None and time.time() < end:
+    while not rec["url"] and rec["p"].poll() is None and time.time() < end:
         time.sleep(0.1)
     if not rec["url"]:
         with LOCK:
             _drop(name)
-        raise RuntimeError("claude auth login gave no sign-in link: " + " ".join(rec["out"])[-200:])
+        raise RuntimeError(f"claude {'setup-token' if setup else 'auth login'} gave no sign-in link: " + " ".join(rec["out"])[-200:])
     if name:
-        write(d / INFO, {**owned(d, by), "kind": "login", "error": ""})
+        write(d / INFO, {**owned(d, by), "kind": "token" if setup else "login", "error": ""})
     return rec["url"]
 
 
 def code(name: str, text: str, wait: float = 90) -> str:
-    """The code from the sign-in page into the waiting `claude auth login`; who is signed in now."""
+    """The code from the sign-in page into the waiting `claude setup-token` or `auth login`; who is signed in now."""
+    clean = text.strip()
+    if re.fullmatch(r"sk-ant-oat\d\d-[\w-]{20,400}", clean):
+        with LOCK:
+            _drop(name)
+        return set_secret(name, "token", clean)
+    if re.fullmatch(r"sk-ant-api\d\d-[\w-]{20,400}", clean):
+        with LOCK:
+            _drop(name)
+        return set_secret(name, "apikey", clean)
+
     d = where(name)
     with LOCK:
         rec = LOGINS.get(name)
         if not rec or rec["p"].poll() is not None:
             LOGINS.pop(name, None)
             raise RuntimeError("no sign-in waits for a code here (it ends after 15 minutes): press Sign in again")
+        by = rec.get("by", "")
+        setup = rec.get("setup", False)
+        if "master" in rec:
+            try:
+                os.write(rec["master"], (clean + "\n").encode("utf-8"))
+            except OSError as e:
+                raise RuntimeError(f"the sign-in ended: {e}") from e
+        else:
+            try:
+                rec["p"].stdin.write(clean + "\n")
+                rec["p"].stdin.flush()
+            except OSError as e:
+                raise RuntimeError(f"the sign-in ended: {e}") from e
+
+    end = time.time() + wait
+    if setup:
+        while rec["p"].poll() is None and time.time() < end:
+            if any(re.search(r"sk-ant-oat\d\d-[\w-]{20,400}", line) for line in rec["out"]):
+                break
+            time.sleep(0.1)
+    else:
         try:
-            rec["p"].stdin.write(text.strip() + "\n")
-            rec["p"].stdin.flush()
-        except OSError as e:
-            raise RuntimeError(f"the sign-in ended: {e}") from e
-    try:
-        rc = rec["p"].wait(wait)
-    except subprocess.TimeoutExpired:
-        rc = None
+            rec["p"].wait(wait)
+        except subprocess.TimeoutExpired:
+            pass
+
     with LOCK:
         if LOGINS.get(name) is rec:
             _drop(name)
-    if rc != 0:
+
+    # A 1-year token printed by claude setup-token:
+    token = next((m.group(0) for line in rec["out"] if (m := re.search(r"sk-ant-oat\d\d-[\w-]{20,400}", line))), None)
+    if token:
+        set_secret(name, "token", token, by=by)
+        s = status(MAIN) if not name else {}
+        return f"{name or 'own'}: long-lived token saved" + (f" as {s['email']}" if s.get("email") else "")
+
+    if setup:
+        said = next((x for x in reversed(rec["out"]) if x.strip()), "no answer")
+        note(name, d, error=said[-300:])
+        raise RuntimeError(f"setup-token failed: {said[-200:]}")
+
+    if rec["p"].poll() != 0:
         said = next((x for x in reversed(rec["out"]) if x.strip()), "no answer")
         note(name, d, error=said[-300:])
         raise RuntimeError(f"sign-in failed: {said[-200:]}")
+
     for f, _, _, _ in SECRETS.values():  # a browser sign-in replaces a token or key (the pc's own: kept beside ~/.claude)
         (kept(name) / f).unlink(missing_ok=True)
     if name:
         plugin_secrets(d)
     s = status(d, fresh=True)
-    note(name, d, kind="login", error="", **s)
+    note(name, d, kind="login", error="", at=int(time.time()), **s)
     return f"{name or 'own'}: signed in" + (f" as {s['email']}" if s.get("email") else "")
 
 
@@ -329,7 +446,7 @@ def set_secret(name: str, kind: str, value: str, by: str = "") -> str:
             (d / other).unlink(missing_ok=True)
     with LOCK:
         _drop(name)
-    write(d / INFO, {**{k: v for k, v in (owned(d, by) if name else info(d)).items() if k not in ("email", "plan")}, "kind": kind, "error": ""})
+    write(d / INFO, {**{k: v for k, v in (owned(d, by) if name else info(d)).items() if k not in ("email", "plan")}, "kind": kind, "error": "", "at": int(time.time())})
     return f"{name or 'own'}: {'long-lived token' if kind == 'token' else 'API key'} saved" + (" (chats and workers; the terminal keeps its own sign-in)" if not name else "")
 
 
@@ -366,15 +483,35 @@ def listing(windows_of=None, now: float = 0) -> list:
                 _drop(n)
     win = lambda n: [list(w) for w in windows_of(n)] if windows_of else []
     ok, oi = own_kind(), info(kept(""))
-    out = [{"id": "", **status(MAIN), "kind": ok, "windows": win(""), "error": OWN_ERROR[""], **({"login": LOGINS[""]["url"]} if "" in LOGINS and LOGINS[""]["url"] else {}),
+    s = status(MAIN)
+    if ok:
+        prev = secret_preview(kept(""), ok)
+        at = int(oi.get("at") or file_time(kept("") / SECRETS[ok][0]))
+        exp = (at + 365 * 86400) if ok == "token" and at else 0
+    else:
+        prev = ""
+        at = int(oi.get("at") or file_time(MAIN / ".credentials.json"))
+        exp = int(s.get("expires") or 0)
+    out = [{"id": "", **s, "kind": ok, "preview": prev, "at": at, "expires": exp,
+            "windows": win(""), "error": OWN_ERROR[""], **({"login": LOGINS[""]["url"], "setup": LOGINS[""].get("setup", False)} if "" in LOGINS and LOGINS[""]["url"] else {}),
             **({"spent": spent("", now), **({"budget": oi["budget"]} if oi.get("budget") else {})} if ok == "apikey" else {})}]
     for n in names():
         d, i = ROOT / n, info(ROOT / n)
         kind = next((k for k, (f, *_) in SECRETS.items() if (d / f).exists()), "") \
             or ("login" if (d / ".credentials.json").exists() or sys.platform == "darwin" and i.get("email") else "")
-        s = status(d) if kind == "login" else {}
-        out.append({"id": n, "kind": kind, "email": s.get("email") or "", "plan": s.get("plan") or "", "error": i.get("error") or "",
-                    "by": str(i.get("by") or ""), **({"login": LOGINS[n]["url"]} if n in LOGINS and LOGINS[n]["url"] else {}),
+        if kind in SECRETS:
+            prev = secret_preview(d, kind)
+            at = int(i.get("at") or file_time(d / SECRETS[kind][0]))
+            exp = (at + 365 * 86400) if kind == "token" and at else 0
+            st = {}
+        else:
+            prev = ""
+            st = status(d) if kind == "login" else {}
+            at = int(i.get("at") or file_time(d / ".credentials.json"))
+            exp = int(st.get("expires") or 0)
+        out.append({"id": n, "kind": kind, "email": st.get("email") or "", "plan": st.get("plan") or "",
+                    "preview": prev, "at": at, "expires": exp, "error": i.get("error") or "",
+                    "by": str(i.get("by") or ""), **({"login": LOGINS[n]["url"], "setup": LOGINS[n].get("setup", False)} if n in LOGINS and LOGINS[n]["url"] else {}),
                     "windows": win(n), **({"spent": spent(n, now), **({"budget": i["budget"]} if i.get("budget") else {})} if kind == "apikey" else {})})
     return out
 
@@ -477,6 +614,13 @@ def self_test():
             "    if c != 'good#code':\n"
             "        print('Login failed: That code was not accepted.'); sys.exit(1)\n"
             "    json.dump({'claudeAiOauth': {'accessToken': 'new'}}, open(os.path.join(d, '.credentials.json'), 'w')); print('Login successful.')\n"
+            "elif sys.argv[1:2] == ['setup-token']:\n"
+            "    print('If the browser did not open, visit: https://claude.com/cai/oauth/authorize?code=true&state=x', flush=True)\n"
+            "    print('Paste code here if prompted > ', end='', flush=True)\n"
+            "    c = sys.stdin.readline().strip()\n"
+            "    if c != 'good#code':\n"
+            "        print('Error: That code was not accepted.'); sys.exit(1)\n"
+            "    print('Long-lived authentication token created successfully!\\nYour OAuth token (valid for 1 year):\\nsk-ant-oat01-0123456789abcdef0123456789abcdef0123456789\\n')\n"
             "elif sys.argv[1:3] == ['auth', 'status']:\n"
             "    ok = not d or os.path.exists(os.path.join(d, '.credentials.json'))  # no folder: the default account\n"
             "    print(json.dumps({'loggedIn': ok, 'email': 'w@example.org' if 'accounts' in d else 'me@example.org', 'planTier': 'max_5x'}))\n"
@@ -489,7 +633,7 @@ def self_test():
             (fake / "claude").chmod(0o755)
         os.environ["PATH"] = str(fake) + os.pathsep + os.environ["PATH"]
         os.environ["CLAUDE_CONFIG_DIR"] = str(MAIN)  # the pc's own sign-in of this test: never the real ~/.claude
-        url = login("thuis")
+        url = login("thuis", setup=False)
         assert url == "https://claude.com/cai/oauth/authorize?code=true&state=x", url
         assert {a["id"]: a for a in listing()}["thuis"]["login"] == url, "the waiting link shows on the page"
         try:
@@ -498,14 +642,24 @@ def self_test():
         except RuntimeError as e:
             assert "not accepted" in str(e), e
         assert "thuis" not in LOGINS and info(folder("thuis"))["error"], "a failed sign-in ends and says why"
-        login("thuis")
+        login("thuis", setup=False)
         assert code("thuis", "good#code") == "thuis: signed in as w@example.org"
         acc = {a["id"]: a for a in listing()}
         assert acc[""]["email"] == "me@example.org" and acc["thuis"]["kind"] == "login" and "login" not in acc["thuis"], acc
-        assert login("") == url and {a["id"]: a for a in listing()}[""]["login"] == url, "the pc's own signs in again the same way"
+        assert login("", setup=False) == url and {a["id"]: a for a in listing()}[""]["login"] == url, "the pc's own signs in again the same way"
         assert code("", "good#code").startswith("own: signed in") and not (MAIN / INFO).exists(), "no file of ours in ~/.claude"
         assert json.loads((MAIN / ".credentials.json").read_text())["claudeAiOauth"]["accessToken"] == "new"
         assert logout_own() == "own: signed out" and not (MAIN / ".credentials.json").exists()
+        # setup-token creates a 1-year token directly via the browser flow
+        u2 = login("tok1", setup=True)
+        assert u2 == url and {a["id"]: a for a in listing()}["tok1"]["login"] == url
+        assert code("tok1", "good#code").startswith("tok1: long-lived token saved")
+        assert {a["id"]: a for a in listing()}["tok1"]["kind"] == "token"
+        remove("tok1")
+        # pasting a token directly into code() saves it without waiting for claude
+        assert code("tok2", "sk-ant-oat01-" + "t" * 40).startswith("tok2: long-lived token saved")
+        assert {a["id"]: a for a in listing()}["tok2"]["kind"] == "token"
+        remove("tok2")
         # the pc's own on a long-lived token or API key: for the companion's runs only, beside ~/.claude, never in it
         assert env("") == {} and own_kind() == ""
         own_key = "sk-ant-api03-" + "o" * 40
@@ -516,7 +670,7 @@ def self_test():
         assert (o["kind"], o["spent"], o["budget"]) == ("apikey", 0.5, 5) and not list(MAIN.glob(OWN + "*")), o
         set_secret("", "token", "sk-ant-oat01-" + "o" * 40)
         assert list(env("")) == ["CLAUDE_CODE_OAUTH_TOKEN"] and ".own" not in names()
-        login("")
+        login("", setup=False)
         code("", "good#code")
         assert env("") == {} and own_kind() == "", "a browser sign-in of the pc's own drops its token"
         write(MAIN / ".credentials.json", {"claudeAiOauth": {"accessToken": "main"}})
@@ -549,6 +703,7 @@ def self_test():
         keep_usage("werk", [[40.0, "5h", time.time() + 99]])
         acc = {a["id"]: a for a in listing(lambda n: json.loads((folder(n) / USAGE).read_text())["windows"] if n and (folder(n) / USAGE).exists() else [])}
         assert acc["werk"]["kind"] == "token" and acc["werk"]["windows"][0][0] == 40.0 and "spent" not in acc["werk"], acc["werk"]
+        assert acc["werk"]["preview"] == "sk-ant-oat01-…aaaa" and acc["werk"]["at"] > 0 and acc["werk"]["expires"] == acc["werk"]["at"] + 365 * 86400
         add_spend("werk", 1.5)
         assert spent("werk") == 0.0, "a subscription's turns cost no money"
         set_secret("werk", "apikey", key, by="bob")
@@ -558,6 +713,7 @@ def self_test():
         assert set_budget("werk", 20) == "werk: budget $20.00 a month"
         acc = {a["id"]: a for a in listing()}["werk"]
         assert (acc["spent"], acc["budget"], acc["by"]) == (1.75, 20, "bob"), acc  # made before by was given: the next one who signs it in owns it
+        assert acc["preview"] == "sk-ant-api03-…kkkk" and acc["at"] > 0 and acc["expires"] == 0
         assert spent("werk", time.time() + 40 * 86400) == 0.0, "a new month starts at zero"
         set_secret("nieuw", "apikey", key, by="bob")
         assert {a["id"]: a for a in listing()}["nieuw"]["by"] == "bob" and info(folder("nieuw"))["by"] == "bob"
