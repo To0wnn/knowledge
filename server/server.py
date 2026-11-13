@@ -1052,7 +1052,8 @@ EDIT = ToolAnnotations(read_only_hint=False, destructive_hint=False, open_world_
 REPLACE = ToolAnnotations(read_only_hint=False, destructive_hint=True, open_world_hint=False)
 FETCH = ToolAnnotations(read_only_hint=False, destructive_hint=False, open_world_hint=True)
 # Claude Code defers MCP tools behind ToolSearch; Haiku re-ran the same select up to 6 times before naming a chat (13 Nov
-# 2026). The tools every session starts with load at once; the rest stay deferred, so the prompt stays small.
+# 2026). The tools every session starts with load at once; the rest say false, so a client config with alwaysLoad: true
+# (which also waits for the server before turn 1) still defers them and the prompt stays small.
 ALWAYS_LOAD = {"anthropic/alwaysLoad": True}
 
 PUBLIC_URL = os.environ.get("KNOWLEDGE_PUBLIC_URL", "").rstrip("/")  # how people reach this server; optional
@@ -10249,6 +10250,10 @@ def undo_file(rel: str, who: str, since: float, until: float) -> dict:
     index.refresh(rel)
     audit("undo", rel)
     return row | {"done": True}
+
+
+for _tool in server._tool_manager.list_tools():
+    _tool.meta = _tool.meta or {"anthropic/alwaysLoad": False}
 
 
 if __name__ == "__main__":
