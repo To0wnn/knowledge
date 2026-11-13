@@ -544,7 +544,11 @@ function accountsCell(m) {
     if (acts.length) { const row = el("div", "mx-pop-acts"); row.append(...acts); line.append(row); }
     box.append(line);
   }
-  if (steer) box.append(machineButton("Add account…", "Another Claude account on this pc, for your chats to pick", () => accountAdd(m)));
+  if (steer) {
+    const addRow = el("div", "mx-accounts-add");
+    addRow.append(machineButton("+ Add account…", "Another Claude account on this pc, for your chats to pick", () => accountAdd(m), false, "btn small quiet"));
+    box.append(addRow);
+  }
   return box;
 }
 // A small form in a dialog (it is not redrawn with the list, so what is typed stays); done once closed or sent.
@@ -565,7 +569,7 @@ function accountForm(title, intro, fields, go, send) {
 const ACCOUNT_KIND = { token: "long-lived token", apikey: "API key", login: "browser sign-in" };
 // How an account signs in: [value, button, what it is, what to paste (none: the browser), its form]
 const ACCOUNT_WAYS = [
-  ["login", "Browser", "Sign in with the account in your browser; claude.com then shows a code to paste here. Uses the account's subscription.", "", ""],
+  ["login", "Browser", "Sign in with the account in your browser; claude.com then shows a code to paste here. Uses claude setup-token so it holds for 1 year.", "", ""],
   ["token", "Long-lived token", "Run claude setup-token in a terminal on any pc and paste the token it prints. It holds for a year and uses the account's subscription.", "sk-ant-oat01-…", "sk-ant-oat\\d\\d-[\\w\\-]{20,400}"],
   ["apikey", "API key", "An API key from the Anthropic Console (console.anthropic.com > API keys). Billed per use, not the subscription.", "sk-ant-api03-…", "sk-ant-api\\d\\d-[\\w\\-]{20,400}"]];
 function accountAdd(m, account = null) { // null: a new account; "": the pc's own; a name: that account
@@ -583,7 +587,7 @@ function accountAdd(m, account = null) { // null: a new account; "": the pc's ow
   };
   for (const w of ACCOUNT_WAYS) { const b = el("button", null, w[1]); b.type = "button"; b.dataset.way = w[0]; b.onclick = () => pick(w); ways.append(b); }
   const intro = account === null ? ["Chats on this pc can then run under it (the model chip). Settings, plugins and skills stay the pc's own."]
-    : account === "" ? ["Browser signs ~/.claude itself in again (the terminal too). A long-lived token or API key runs this pc's chats and workers on it instead; the terminal keeps its own sign-in. Browser again drops the token or key."] : [];
+    : account === "" ? ["Browser signs in via claude.com (1 year token); the terminal keeps its own sign-in in ~/.claude. A long-lived token or API key runs this pc's chats and workers on it instead."] : [];
   const shown = accountForm(account === "" ? `This pc's own Claude on ${m.label}` : account ? `Sign ${account} in on ${m.label}` : `Add a Claude account on ${m.label}`,
     [...intro, ways, about], [...(account === null ? [["Name", name]] : []), ["Token", secret]], account === null ? "Add" : "Sign in", () => (way[0] === "login"
       ? machineAction(m, "claude_login", { account: name.value })
@@ -594,8 +598,13 @@ function accountAdd(m, account = null) { // null: a new account; "": the pc's ow
 function accountCode(m, account) {
   const code = el("input");
   code.required = true; code.autocomplete = "off"; code.placeholder = "the code from the sign-in page";
-  return accountForm(`Sign ${account} in on ${m.label}`, ["Paste the code claude.com showed after you signed in."], [["Code", code]], "Sign in",
-    () => machineAction(m, "claude_code", { account, code: code.value.trim() }));
+  return accountForm(`Sign ${account} in on ${m.label}`, ["Paste the code claude.com showed after you signed in, or an sk-ant-oat... / sk-ant-api... secret."], [["Code", code]], "Sign in",
+    () => {
+      const val = code.value.trim();
+      if (/^sk-ant-oat\d\d-[\w-]{20,400}$/.test(val)) return machineAction(m, "claude_token", { account, token: val });
+      if (/^sk-ant-api\d\d-[\w-]{20,400}$/.test(val)) return machineAction(m, "claude_key", { account, key: val });
+      return machineAction(m, "claude_code", { account, code: val });
+    });
 }
 // A limit: a switch (off: no limit, sent as 0) and, when on, a number from 1 up (how many is the owner's choice).
 function limitControl(most, busy, aria, send) {

@@ -1723,11 +1723,6 @@ function accountTiming(a) {
   if (a.pc) return "";
   const parts = [];
   const now = Date.now() / 1000;
-  if (a.at && a.at > 0) {
-    const d = Math.max(0, now - a.at);
-    const since = d < 60 ? "just now" : d < 3600 ? `${Math.floor(d / 60)}m ago` : d < 86400 ? `${Math.floor(d / 3600)}h ago` : `${Math.floor(d / 86400)}d ago`;
-    parts.push(`signed in ${since}`);
-  }
   if (a.expires && a.expires > 0) {
     const left = a.expires - now;
     if (left <= 0) parts.push("expired");

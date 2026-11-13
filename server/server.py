@@ -6740,6 +6740,8 @@ def action_args(action: str, args: dict) -> dict:
         if action == "claude_logout" and args.get("confirm") != "SIGN OUT":
             raise ValueError("Sign out needs the words SIGN OUT typed in the confirm dialog")
         out = {"account": str(args.get("account", ""))}
+        if action == "claude_login" and "setup" in args:
+            out["setup"] = args["setup"] is True
         if action == "claude_budget":
             usd = args.get("usd")
             if not isinstance(usd, (int, float)) or isinstance(usd, bool) or not 0 <= usd < 1_000_000:

@@ -276,9 +276,10 @@ def note(name: str, d: Path, **change):
         write(d / INFO, {**info(d), **change})
 
 
-def login(name: str, wait: float = 30, by: str = "") -> str:
+def login(name: str, wait: float = 30, by: str = "", setup: bool = True) -> str:
     """Start a browser sign-in for account `name` (made when new; "" signs the pc's own in again); the URL to open.
-    The code goes in with code()."""
+    The code goes in with code(). When `setup` is True (default), it runs `claude setup-token` to create a 1-year
+    long-lived token directly; when False, it runs `claude auth login`."""
     d = where(name)
     if name:
         sync(d)
@@ -286,10 +287,11 @@ def login(name: str, wait: float = 30, by: str = "") -> str:
         _drop(name)
         e = run_env(name, d)
         # BROWSER: a pc without a desktop session must not start one (xdg-open honours it); the page opens the link
-        p = subprocess.Popen(command("auth", "login", "--claudeai"), stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
+        cmd = command("setup-token") if setup else command("auth", "login", "--claudeai")
+        p = subprocess.Popen(cmd, stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
                              env={**e, "BROWSER": "true" if os.name != "nt" else e.get("BROWSER", "")},
                              text=True, encoding="utf-8", errors="replace")
-        rec = LOGINS[name] = {"p": p, "url": "", "out": [], "at": time.time()}
+        rec = LOGINS[name] = {"p": p, "url": "", "out": [], "at": time.time(), "by": by, "setup": setup}
 
     def read():
         for line in p.stdout:
@@ -303,22 +305,33 @@ def login(name: str, wait: float = 30, by: str = "") -> str:
     if not rec["url"]:
         with LOCK:
             _drop(name)
-        raise RuntimeError("claude auth login gave no sign-in link: " + " ".join(rec["out"])[-200:])
+        raise RuntimeError(f"claude {'setup-token' if setup else 'auth login'} gave no sign-in link: " + " ".join(rec["out"])[-200:])
     if name:
-        write(d / INFO, {**owned(d, by), "kind": "login", "error": ""})
+        write(d / INFO, {**owned(d, by), "kind": "token" if setup else "login", "error": ""})
     return rec["url"]
 
 
 def code(name: str, text: str, wait: float = 90) -> str:
-    """The code from the sign-in page into the waiting `claude auth login`; who is signed in now."""
+    """The code from the sign-in page into the waiting `claude setup-token` or `auth login`; who is signed in now."""
+    clean = text.strip()
+    if re.fullmatch(r"sk-ant-oat\d\d-[\w-]{20,400}", clean):
+        with LOCK:
+            _drop(name)
+        return set_secret(name, "token", clean)
+    if re.fullmatch(r"sk-ant-api\d\d-[\w-]{20,400}", clean):
+        with LOCK:
+            _drop(name)
+        return set_secret(name, "apikey", clean)
+
     d = where(name)
     with LOCK:
         rec = LOGINS.get(name)
         if not rec or rec["p"].poll() is not None:
             LOGINS.pop(name, None)
             raise RuntimeError("no sign-in waits for a code here (it ends after 15 minutes): press Sign in again")
+        by = rec.get("by", "")
         try:
-            rec["p"].stdin.write(text.strip() + "\n")
+            rec["p"].stdin.write(clean + "\n")
             rec["p"].stdin.flush()
         except OSError as e:
             raise RuntimeError(f"the sign-in ended: {e}") from e
@@ -333,6 +346,14 @@ def code(name: str, text: str, wait: float = 90) -> str:
         said = next((x for x in reversed(rec["out"]) if x.strip()), "no answer")
         note(name, d, error=said[-300:])
         raise RuntimeError(f"sign-in failed: {said[-200:]}")
+
+    # A 1-year token printed by claude setup-token:
+    token = next((m.group(0) for line in rec["out"] if (m := re.search(r"sk-ant-oat\d\d-[\w-]{20,400}", line))), None)
+    if token:
+        set_secret(name, "token", token, by=by)
+        s = status(MAIN) if not name else {}
+        return f"{name or 'own'}: long-lived token saved" + (f" as {s['email']}" if s.get("email") else "")
+
     for f, _, _, _ in SECRETS.values():  # a browser sign-in replaces a token or key (the pc's own: kept beside ~/.claude)
         (kept(name) / f).unlink(missing_ok=True)
     if name:
@@ -542,6 +563,13 @@ def self_test():
             "    if c != 'good#code':\n"
             "        print('Login failed: That code was not accepted.'); sys.exit(1)\n"
             "    json.dump({'claudeAiOauth': {'accessToken': 'new'}}, open(os.path.join(d, '.credentials.json'), 'w')); print('Login successful.')\n"
+            "elif sys.argv[1:2] == ['setup-token']:\n"
+            "    print('If the browser did not open, visit: https://claude.com/cai/oauth/authorize?code=true&state=x', flush=True)\n"
+            "    print('Paste code here if prompted > ', end='', flush=True)\n"
+            "    c = sys.stdin.readline().strip()\n"
+            "    if c != 'good#code':\n"
+            "        print('Error: That code was not accepted.'); sys.exit(1)\n"
+            "    print('✓ Long-lived authentication token created successfully!\\nYour OAuth token (valid for 1 year):\\nsk-ant-oat01-0123456789abcdef0123456789abcdef0123456789\\n')\n"
             "elif sys.argv[1:3] == ['auth', 'status']:\n"
             "    ok = not d or os.path.exists(os.path.join(d, '.credentials.json'))  # no folder: the default account\n"
             "    print(json.dumps({'loggedIn': ok, 'email': 'w@example.org' if 'accounts' in d else 'me@example.org', 'planTier': 'max_5x'}))\n"
@@ -554,7 +582,7 @@ def self_test():
             (fake / "claude").chmod(0o755)
         os.environ["PATH"] = str(fake) + os.pathsep + os.environ["PATH"]
         os.environ["CLAUDE_CONFIG_DIR"] = str(MAIN)  # the pc's own sign-in of this test: never the real ~/.claude
-        url = login("thuis")
+        url = login("thuis", setup=False)
         assert url == "https://claude.com/cai/oauth/authorize?code=true&state=x", url
         assert {a["id"]: a for a in listing()}["thuis"]["login"] == url, "the waiting link shows on the page"
         try:
@@ -563,14 +591,24 @@ def self_test():
         except RuntimeError as e:
             assert "not accepted" in str(e), e
         assert "thuis" not in LOGINS and info(folder("thuis"))["error"], "a failed sign-in ends and says why"
-        login("thuis")
+        login("thuis", setup=False)
         assert code("thuis", "good#code") == "thuis: signed in as w@example.org"
         acc = {a["id"]: a for a in listing()}
         assert acc[""]["email"] == "me@example.org" and acc["thuis"]["kind"] == "login" and "login" not in acc["thuis"], acc
-        assert login("") == url and {a["id"]: a for a in listing()}[""]["login"] == url, "the pc's own signs in again the same way"
+        assert login("", setup=False) == url and {a["id"]: a for a in listing()}[""]["login"] == url, "the pc's own signs in again the same way"
         assert code("", "good#code").startswith("own: signed in") and not (MAIN / INFO).exists(), "no file of ours in ~/.claude"
         assert json.loads((MAIN / ".credentials.json").read_text())["claudeAiOauth"]["accessToken"] == "new"
         assert logout_own() == "own: signed out" and not (MAIN / ".credentials.json").exists()
+        # setup-token creates a 1-year token directly via the browser flow
+        u2 = login("tok1", setup=True)
+        assert u2 == url and {a["id"]: a for a in listing()}["tok1"]["login"] == url
+        assert code("tok1", "good#code").startswith("tok1: long-lived token saved")
+        assert {a["id"]: a for a in listing()}["tok1"]["kind"] == "token"
+        remove("tok1")
+        # pasting a token directly into code() saves it without waiting for claude
+        assert code("tok2", "sk-ant-oat01-" + "t" * 40).startswith("tok2: long-lived token saved")
+        assert {a["id"]: a for a in listing()}["tok2"]["kind"] == "token"
+        remove("tok2")
         # the pc's own on a long-lived token or API key: for the companion's runs only, beside ~/.claude, never in it
         assert env("") == {} and own_kind() == ""
         own_key = "sk-ant-api03-" + "o" * 40
@@ -581,7 +619,7 @@ def self_test():
         assert (o["kind"], o["spent"], o["budget"]) == ("apikey", 0.5, 5) and not list(MAIN.glob(OWN + "*")), o
         set_secret("", "token", "sk-ant-oat01-" + "o" * 40)
         assert list(env("")) == ["CLAUDE_CODE_OAUTH_TOKEN"] and ".own" not in names()
-        login("")
+        login("", setup=False)
         code("", "good#code")
         assert env("") == {} and own_kind() == "", "a browser sign-in of the pc's own drops its token"
         write(MAIN / ".credentials.json", {"claudeAiOauth": {"accessToken": "main"}})

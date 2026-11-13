@@ -232,12 +232,12 @@ fixed remote actions and relays chats. Installing it is part of the client setup
 - **More than one Claude account on a pc** (`plugin/hooks/accounts.py`): Machines > Claude Code > Accounts lists the
   pc's own sign-in and each extra account, with its plan and the usage of its chat turns. Add account… takes a name
   (a-z, 0-9, -) and one of three ways in (Change sign-in… on an account's row switches it to another):
-  - **Sign in with the browser:** the companion runs `claude auth login` in the account's folder; its sign-in link shows
-    in the row (Open sign-in). After signing in, claude.com shows a code; Paste code… sends it to that waiting run (it
-    only works with that run's own PKCE verifier; the run ends after 15 minutes).
-  - **Long-lived token:** `claude setup-token` in a terminal on any pc (it needs a terminal, so the companion cannot run
-    it), the token pasted. It is kept in the account's folder (owner only) and given to a chat as
-    `CLAUDE_CODE_OAUTH_TOKEN`, which Claude Code prefers over a stored sign-in.
+  - **Sign in with the browser:** the companion runs `claude setup-token` (or `auth login`) in the account's folder;
+    its sign-in link shows in the row (Open sign-in). After signing in, claude.com shows a code; Paste code… sends it
+    to that waiting run to save the 1-year token directly.
+  - **Long-lived token:** `claude setup-token` in a terminal on any pc, or pasted directly into Paste code… / Add account.
+    It is kept in the account's folder (owner only) and given to a chat as `CLAUDE_CODE_OAUTH_TOKEN`, which Claude Code
+    prefers over a stored sign-in.
   - **API key:** an Anthropic Console key (`sk-ant-api03-...`), billed per use instead of the subscription; kept the same
     way and given as `ANTHROPIC_API_KEY` (Claude Code then runs in `api_key` mode, also in `claude -p`). A token and a
     key replace each other; a browser sign-in removes both. The pc's own `CLAUDE_CODE_OAUTH_TOKEN`, `ANTHROPIC_API_KEY`
@@ -268,9 +268,8 @@ fixed remote actions and relays chats. Installing it is part of the client setup
   page shows what is left of it.
 - **Token type and validity:** Machines shows for each account what kind of sign-in or token it uses (browser sign-in,
   long-lived token, API key) with a safe preview of the token prefix and suffix (`sk-ant-oat01-…xxxx` or
-  `sk-ant-api03-…xxxx`), how long it has been signed in ("signed in 2h ago"), and its validity ("expires in 28d",
-  1 year for long-lived tokens from `setup-token`, or "no expiry" for API keys). The chat picker shows the same in
-  each account's tooltip.
+  `sk-ant-api03-…xxxx`), and its validity ("expires in 28d", 1 year for long-lived tokens from `setup-token`, or
+  "no expiry" for API keys). The chat picker shows the same in each account's tooltip.
 - **The pc's own sign-in:** the companion talks to the server with its own token, not with Claude's sign-in, so it
   stays online when Claude is signed out. The owner signs it in again from the page (Sign in again, the same browser
   way), signs it out (Sign out…, typed SIGN OUT: its terminal sessions, workers and chats on it stop until it signs in),

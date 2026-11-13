@@ -547,8 +547,17 @@ body.admin-page { display: block; overflow-y: auto; }
 #machines .yolo-switch.on input[role="switch"] { background: var(--bad); }
 @media (prefers-reduced-motion: reduce) { #machines input[role="switch"], #machines input[role="switch"]::after { transition: none; } }
 .mx-tool small { font-size: 11px; }
-.mx-account { margin: 0 0 8px; overflow-wrap: anywhere; }
+.mx-account {
+  padding: 8px 10px;
+  border: 1px solid var(--line);
+  border-radius: var(--r-md);
+  background: var(--panel-hi);
+  margin: 0 0 8px;
+  overflow-wrap: anywhere;
+}
 .mx-account .pill { margin-left: 4px; }
+.mx-account .mx-pop-acts { margin-top: 8px; padding-top: 6px; border-top: 1px solid var(--line); }
+.mx-accounts-add { margin-top: 4px; }
 .acc-bars { display: flex; flex-wrap: wrap; align-items: center; gap: 4px 6px; margin: 2px 0; }
 .acc-bar { width: 56px; height: 6px; display: inline-block; }
 .mx-busy { color: var(--act-text); font-weight: 600; }
