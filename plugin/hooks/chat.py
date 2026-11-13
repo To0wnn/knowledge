@@ -14,6 +14,7 @@ web UI (ask()), each agent its native way: Claude's permission prompt tool (appr
 Standard library only; Linux, macOS and Windows.
 """
 from __future__ import annotations  # X | None on Python 3.9 (macOS's /usr/bin/python3)
+import contextlib
 import hashlib
 import itertools
 import json
@@ -81,7 +82,7 @@ def _ask_models(agent: str):
     found = []
     try:
         if agent == "claude":
-            found = _claude_models()
+            found = _claude_models(save=workers.DIR.parent / "claude-models.json")
         elif (exe := shutil.which(agent)) and agent == "codex":
             out = subprocess.run(workers.shim_line([exe, "debug", "models"]) if exe.lower().endswith((".cmd", ".bat")) else [exe, "debug", "models"],
                                  capture_output=True, text=True, encoding="utf-8", errors="replace", timeout=30).stdout  # UTF-8, never the ANSI code page
@@ -97,8 +98,8 @@ def _ask_models(agent: str):
             found = [{"id": i, "name": n.strip()[:80], "efforts": []} for i, _, n in (ln.partition("\t") for ln in out.splitlines()) if n and MODEL_ID.fullmatch(i)]
     except (OSError, subprocess.SubprocessError, ValueError, KeyError, TypeError, AttributeError):
         found = []
-    # an empty answer (offline, a CLI error) is asked again in 10 minutes, not after hours
-    _MODELS[agent] = (time.time() - (MODELS_TTL - 600 if not found else 0), found[:40])
+    # an empty answer (offline, a CLI error, Claude's aliases without the Models API) is asked again in 10 minutes, not after hours
+    _MODELS[agent] = (time.time() - (MODELS_TTL - 600 if not found or agent == "claude" and not _CLAUDE_API else 0), found[:40])
 
 
 def _claude_token() -> str:
@@ -114,7 +115,7 @@ def _claude_token() -> str:
         return ""
 
 
-def _claude_models(fetch=None) -> list:
+def _claude_models(fetch=None, save=None) -> list:
     """Claude Code's aliases (the newest of each line) plus every older model the account may use, from the Models API
     with Claude Code's own sign-in, so new models appear and retired ones go by themselves. Without an answer: the
     last list, else the aliases alone."""
@@ -128,8 +129,13 @@ def _claude_models(fetch=None) -> list:
         data = [m for m in fetch().get("data", []) if MODEL_ID.fullmatch(str(m.get("id", "")))]
         if data:
             _CLAUDE_API = data
+            if save:  # kept on disk: the companion restarts with every plugin update, and its sign-in may have expired then
+                save.write_text(json.dumps(data), encoding="utf-8")
     except (OSError, ValueError, AttributeError):
         pass
+    if not _CLAUDE_API and save:
+        with contextlib.suppress(OSError, ValueError, AttributeError, TypeError):
+            _CLAUDE_API = [m for m in json.loads(save.read_text(encoding="utf-8")) if MODEL_ID.fullmatch(str(m.get("id", "")))]
     line = lambda m: m.get("line") or next((a for a in CLAUDE_MODELS if f"-{a}-" in m["id"]), "")
     def efforts(m):
         e = (m.get("capabilities") or {}).get("effort") or {}
@@ -2128,6 +2134,10 @@ def self_test():
         assert got["haiku"]["efforts"] == [] and got["fable"]["efforts"] == list(EFFORTS[:5])
         def boom(): raise OSError("offline")
         assert [m["id"] for m in _claude_models(boom)] == list(got)  # a failed ask keeps the last list
+        kept = workers.DIR.parent / "claude-models.json"
+        _claude_models(lambda: api, save=kept)
+        _CLAUDE_API.clear()  # a restarted companion whose sign-in has expired: the list on disk, not the aliases alone
+        assert [m["id"] for m in _claude_models(boom, save=kept)] == list(got)
     workers.DIR = w
     assert json.loads(stdin_for("agy", 'a "b"\nc')) == {"event": "user", "message": {"role": "user", "content": 'a "b"\nc'}}
     w0 = workers.DIR  # a chat turn's rate_limit_event is kept for the companion's limit (usage-claude-chat.json)

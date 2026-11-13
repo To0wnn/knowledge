@@ -4950,7 +4950,8 @@ async def ui_transcribe(request: Request):
 
 PREFS_FILE = ADMIN_DIR / "user_prefs.json"  # per person, set on the Settings page: {user: {chat_default: {agent, id, effort}, keys: {action: combo}, matrix_room, <PREF_CHOICES key>: value}}
 PREF_CHOICES = {"grid_open": ("tab", "here"), "grid_group": ("project", "together"), "send_key": ("ctrl", "enter", "shift"), "start_page": ("chats", "tasks", "notes", "map"),
-                "live_typing": ("on", "off"), "needs_scope": ("mine", "all")}  # the first is the default: not stored. live_typing: others in a shared chat see what you type
+                "live_typing": ("on", "off"), "needs_scope": ("mine", "all"),
+                "grid_per_part": ("6", "1", "2", "3", "4", "5", "8", "12", "off")}  # the first is the default: not stored. live_typing: others in a shared chat see what you type
 
 MATRIX_TOKENS_FILE = ADMIN_DIR / "matrix_tokens.json"  # {user: token} for an admin's own homeserver; never sent back to the page
 MATRIX_URL = re.compile(r"https?://[^\s/?#]{1,255}(/[^\s?#]{0,200})?")
@@ -4964,7 +4965,7 @@ PREF_KEY_COMBO = re.compile(r"(Ctrl\+|Alt\+)(Shift\+)?(\+|[^\s+]{1,12})")  # wit
 @server.custom_route("/ui/api/me/prefs", methods=["POST"])
 async def ui_me_prefs(request: Request):
     """Any of {chat_default: {agent, id, effort} | null, chat_reader: {agent, id, effort} | null, chat_review: {agent, id, effort} | null,
-    keys: {action: combo}, matrix_room, matrix_url, matrix_token (admins; the token is stored apart and never sent back), grid_open, grid_group, send_key, start_page,
+    keys: {action: combo}, matrix_room, matrix_url, matrix_token (admins; the token is stored apart and never sent back), grid_open, grid_group, grid_per_part, send_key, start_page,
     task_names ("Anthony, To0wnn": the names task lines give this person; Needs you then shows only their person lines)}, for this person on every device. keys: the shortcuts that change,
     null = back to the default; checked for shape only: the page owns the actions. chat_default, chat_reader, chat_review: the models for
     new chats, reading/subagents, and review ("" id or effort = the agent's own); checked for shape only: a pc that does not run it falls

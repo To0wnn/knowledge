@@ -6,7 +6,7 @@
 // foldable frame per project, the one last active on top (folding is kept in localStorage; while you look at the grid, by bdHold), or Settings: all in one. A card is the chat itself (ckCard). Only cards on screen
 // are polled (ckTick). ?view=grid is an older link to the same view; ?view=list is the attention list (#/inbox links).
 const BG = { minW: 480, minH: 380, gap: 16, pad: 16, head: 46 };
-const bd = { lay: [], wraps: new Map(), frames: new Map(), held: new Map(), part: (() => { try { return Number(sessionStorage.getItem("kn_part")) || 0; } catch { return 0; } })() };
+const bd = { lay: [], wraps: new Map(), frames: new Map(), held: new Map(), part: (() => { try { const v = sessionStorage.getItem("kn_part"); return v === null ? null : Number(v) || 0; } catch { return null; } })() }; // null: part 1 with a limit, else all (bdRender)
 const bdWide = matchMedia("(min-width: 1000px)");
 bdWide.addEventListener("change", () => ckLayout());
 const bdOn = () => shellRoute.view === "chats" && !shellRoute.arg && shellRoute.q.get("view") !== "list" && bdWide.matches;
@@ -54,8 +54,28 @@ function bdPartShow(n) {
 }
 function bdPartMove(key, n) {
   const known = new Set(ck.chats.map(ckKey)), parts = Object.fromEntries(Object.entries(bdParts()).filter(([k]) => known.has(k) && k !== key));
-  if (n > 1) parts[key] = n;
+  if (n > 1 || bdPerPart()) parts[key] = n; // with a limit a chat without a part is new: the overflow would place it again
   store.set("kn_parts", JSON.stringify(parts));
+}
+// Settings: at most this many chats per part (0: no limit, parts only by hand).
+const bdPerPart = () => (me.prefs?.grid_per_part === "off" ? 0 : Number(me.prefs?.grid_per_part) || 6);
+// The overflow, pure (ui_smoke checks it): each open chat no part holds yet goes to the lowest part with room, the oldest
+// first, and is stored there like a move by hand, so it stays when others close (a chat never jumps between windows).
+function bdFlow(chats, parts, max) {
+  const out = { ...parts }, count = {};
+  for (const c of chats) if (out[ckKey(c)]) count[out[ckKey(c)]] = (count[out[ckKey(c)]] || 0) + 1;
+  for (const c of chats.filter((x) => !out[ckKey(x)]).sort((a, b) => (a.created || 0) - (b.created || 0))) {
+    let n = 1;
+    while ((count[n] || 0) >= max) n++;
+    out[ckKey(c)] = n; count[n] = (count[n] || 0) + 1;
+  }
+  return out;
+}
+function bdPartFill() {
+  const max = bdPerPart();
+  if (!max) return;
+  const parts = bdParts(), next = bdFlow(ck.chats.filter((c) => ckState(c) !== "closed"), parts, max);
+  if (Object.keys(next).length !== Object.keys(parts).length) store.set("kn_parts", JSON.stringify(next));
 }
 addEventListener("storage", (e) => { if (e.key === "kn_parts") bdRender(); }); // moved in another window
 // Alt+0-9 show a part; Alt+Shift+1-9 moves the card you are in or point at there (Settings can change both).
@@ -138,7 +158,7 @@ function bdNeeds() {
 function bdLink() {
   const on = bdOn(), a = $("ck-view");
   bdPartBar(on);
-  const n = on ? (ck.board || []).filter((i) => i.col === "needs" && !ckScope(i)).length : 0;
+  const n = on ? (ck.board || []).filter((i) => i.col === "needs" && !ckInProject(i) && ckYours(i)).length : 0;
   a.href = on ? "#/chats?view=list" : "#/chats";
   a.replaceChildren(on ? "List" : "Grid", ...(n ? [el("span", "n", String(n))] : []));
   a.title = on ? "Review, workers, tasks, earlier and archived chats" + (n ? `; ${n} in other projects need${n > 1 ? "" : "s"} you` : "") : "Back to the grid";
@@ -192,6 +212,8 @@ function bdMove(world, n, before) {
 // the focus and a half-typed message stay.
 function bdRender() {
   if (!$("bd") || $("bd").hidden) return;
+  bdPartFill();
+  if (bd.part == null) bd.part = bdPerPart() ? 1 : 0; // a new window: the first part, as the limit means
   bdLink();
   const together = me.prefs?.grid_group === "together";
   bdHold(together);
@@ -239,14 +261,14 @@ function bdRender() {
   if (!bd.needs.querySelector(".ck-answer, .ck-reply, details[open]") && !selecting(bd.needs)) {
     const had = bd.needs.contains(document.activeElement) && document.activeElement.dataset.row; // the redraw keeps your place
     const h = el("h2", "bd-needs-head", `Needs you · ${needs.length}`);
-    const away = (ck.board || []).filter((i) => i.col === "needs" && !ckScope(i)).length; // as the list says it: never hidden without a word
+    const away = (ck.board || []).filter((i) => i.col === "needs" && !ckInProject(i) && ckYours(i)).length; // as the list says it: never hidden without a word
     if (away) { const b = el("button", "btn small ck-elsewhere", `${away} more in other projects: show all`); b.type = "button"; b.onclick = () => switchProject(ALL); h.append(" ", b); }
     h.append(" ", ckScopeSwitch());
     bd.needs.setAttribute("aria-label", `Needs you: ${needs.length}`);
     bd.needs.replaceChildren(h, ...ckBunches(needs));
     if (had) bd.needs.querySelector(`[data-row="${CSS.escape(had)}"]`)?.focus({ preventScroll: true });
   }
-  const strip = needs.length || ck.scope?.others || (ck.board || []).some((i) => i.col === "needs" && !ckScope(i)); // the switch and "other projects" stay in reach
+  const strip = needs.length || ck.scope?.others || ck.chats.some((c) => !c.closed && ckTheirs(c)) || (ck.board || []).some((i) => i.col === "needs" && !ckInProject(i) && ckYours(i)); // the switch and "other projects" stay in reach
   const order = [...(strip ? [bd.needs] : []), ...(queued.length ? [bd.queue] : []), ...(workers.length ? [bd.workers] : [])];
   if (!strip) bd.needs.remove();
   if (!queued.length) bd.queue.remove();

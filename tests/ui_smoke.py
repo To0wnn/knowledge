@@ -1454,6 +1454,10 @@ async def board(browser, devices, secret: str) -> None:
     check(fr == '[{"project":"b","n":2,"shut":false},{"project":"","n":1,"shut":false},{"project":"a","n":1,"shut":true}]', f"Grid: frames in the order of the chats, latest first, with counts and folding {fr}")
     fr = await pg.evaluate("JSON.stringify([bdProjects([{project: 'b'}, {project: 'a'}], ['a'], true), bdProjects([], [], true)])")
     check(fr == '[[{"project":"","n":2,"shut":false}],[]]', f"Grid: together is one frame, nothing folded {fr}")
+    fl = await pg.evaluate("""JSON.stringify(bdFlow([{machine: 'x', id: 'c', created: 3}, {machine: 'x', id: 'a', created: 1}, {machine: 'x', id: 'b', created: 2}, {machine: 'x', id: 'd', created: 4}], {'x/d': 1}, 2))""")
+    check(fl == '{"x/d":1,"x/a":1,"x/b":2,"x/c":2}', f"Grid: overflow keeps a placed chat, fills part 1 with the oldest, the rest goes to part 2 {fl}")
+    th = await pg.evaluate("""(() => { const u = me.user; return [ckTheirs({by: 'someone-else'}), ckTheirs({by: u}), ckTheirs({rights: 'view'}), ckTheirs({rights: 'act'}), ckTheirs({kind: 'task', by: 'x'})].join(); })()""")
+    check(th == "true,false,true,false,false", f"Only mine: another person's chat is theirs, a chat without a starter only when you may just view it {th}")
     await pg.wait_for_function("ck.summaryAt > 0", timeout=15000)
     order = await pg.evaluate("""(() => { const keep = [ck.chats, ck.board, agentProject, picks]; agentProject = ''; picks = null;
       ck.chats = [{id: 'run', machine: 'x', status: 'running', updated: 9, raised: 1}, {id: 'done', machine: 'x', status: 'idle', updated: 8, raised: 3},
@@ -1520,15 +1524,16 @@ async def board(browser, devices, secret: str) -> None:
     check(cards == [["Approve", "Send back…"], ["Decline…", "Later: in 1 hour", "Later: tomorrow 08:00", "Hide until it changes"],
                     ["Done", "Send back…"], ["Later: in 1 hour", "Later: tomorrow 08:00", "Hide until it changes"], True, True, "claude,codex,agy"],
           f"Needs you: a task card answers Approve / Send back (Decline and Later in ⋯), a result Done / Send back with an agent to pick; a click unfolds the whole line and its writer {cards}")
-    switch = await pg.evaluate("""(() => { const keep = ck.scope, read = (b) => [...b.querySelectorAll('button')].map((x) => [x.textContent, x.getAttribute('aria-pressed')]);
+    switch = await pg.evaluate("""(() => { const keep = ck.scope, chats = ck.chats, read = (b) => [...b.querySelectorAll('button')].map((x) => [x.textContent, x.getAttribute('aria-pressed')]);
+      ck.chats = [{ machine: 'x', id: 'theirs', by: 'someone-else' }, { machine: 'x', id: 'mine', by: me.user }];
       ck.scope = { scope: 'mine', names: ['anthony'], others: 2 }; const a = read(ckScopeSwitch());
-      ck.scope = { scope: 'mine', names: [], others: 0 }; const b = read(ckScopeSwitch());
+      ck.chats = []; ck.scope = { scope: 'mine', names: [], others: 0 }; const b = read(ckScopeSwitch()); ck.chats = chats;
       const t = ckItem({ col: 'needs', kind: 'task', project: 'p', path: 'p-memory/x.md', at: 0, sig: 's', id: 'T-1', key: 'task:p/T-1', title: 'T-1', line: '', approve: true,
         owner: 'Codex', from: 'Rick', author: 'rick.pc', writer: 'rick.pc', pin_to: 'rick.pc', text: 'x' });
       ck.scope = keep; return [a, b, [...t.querySelectorAll('.menu-list button')].some((x) => x.textContent.startsWith('Always trust rick.pc in')),
         [...t.querySelectorAll('.ck-item-acts > button')].map((x) => x.textContent).join('|')]; })()""")
-    check(switch == [[["Only mine", "true"], ["Everyone (+2)", "false"]], [["Only mine", "false"], ["Everyone", "true"]], True, "Approve|Approve on rick.pc only|Send back…"],
-          f"Needs you: the Only mine / Everyone switch says what it hides, and without names it shows everyone; an untrusted writer can be trusted from the card {switch}")
+    check(switch == [[["Only mine", "true"], ["Everyone (+3)", "false"]], [["Only mine", "false"], ["Everyone", "true"]], True, "Approve|Approve on rick.pc only|Send back…"],
+          f"Needs you: the Only mine / Everyone switch says what it hides (2 task lines + 1 chat of someone else), and without names it shows everyone; an untrusted writer can be trusted from the card {switch}")
     await pg.click("#ck-view")
     await pg.wait_for_function("location.hash === '#/chats?view=list' && $('bd').hidden && !!$('ck-side').offsetParent", timeout=5000)
     check(await pg.evaluate("$('ck-view').textContent === 'Grid'"), "the List link opens the list, instead of the grid, and offers Grid back")
@@ -2406,7 +2411,7 @@ async def grid_groups(browser, secret: str) -> None:
     if await pg.evaluate("typeof bdProjects") != "function":
         await ctx.close()
         return
-    await pg.evaluate("agentProject = ''; picks = null; bd.held = new Map(); ck.summaryAt = 0; ckSummary()")  # live: the real chats came first
+    await pg.evaluate("agentProject = ''; picks = null; me.prefs.grid_per_part = 'off'; store.set('kn_parts', '{}'); bd.part = null; bd.held = new Map(); ck.summaryAt = 0; ckSummary()")  # live: the real chats came first; parts by hand only
     heads = "[...document.querySelectorAll('#bd .bd-frame-title strong')].map((s) => s.textContent).join()"
     await pg.wait_for_function(f"{heads} !== '' && document.querySelectorAll('#bd .bd-card').length === 4", timeout=5000)
     check(await pg.evaluate(heads) == "ccc,bbb,aaa", f"Grid: the project last active is on top ({await pg.evaluate(heads)})")
@@ -2457,7 +2462,7 @@ async def grid_groups(browser, secret: str) -> None:
     other.on("pageerror", lambda e: other_errors.append(str(e)))
     await other.goto(f"{URL}/ui#/chats")
     await other.wait_for_function("typeof bdRender === 'function' && ck.ready", timeout=15000)
-    await other.evaluate("agentProject = ''; picks = null; ck.summaryAt = 0; ckSummary()")
+    await other.evaluate("agentProject = ''; picks = null; me.prefs.grid_per_part = 'off'; store.set('kn_parts', '{}'); bd.part = null; ck.summaryAt = 0; ckSummary()")
     await other.wait_for_function(f"{cards} === '1,2,3,4'", timeout=5000)
     check(await other.evaluate("bd.part") == 0, "Parts: a new window starts on all, the other window's part is its own")
     await other.evaluate("$('bd-stage').focus()")
@@ -2566,6 +2571,11 @@ async def grid_groups(browser, secret: str) -> None:
     await pg.evaluate("ck.summaryAt = 0; ckSummary().then(() => bdPartShow(0))")  # this window last saw chat 1 raised
     await pg.wait_for_function(f"bd.part === 0 && {cards} === '1,2,3,4' && {heads} === 'bbb,aaa,ccc'", timeout=5000)
 
+    await pg.evaluate("me.prefs.grid_per_part = '2'; bdPartShow(1)")
+    got = await pg.evaluate(f"[{cards}.split(',').filter(Boolean).length, $('bd-parts').children.length, Object.values(bdParts()).sort().join()]")
+    check(got == [2, 3, "1,1,2,2"], f"Parts: with 2 per part the other chats overflow to part 2, its button appears {got}")
+    await pg.evaluate("me.prefs.grid_per_part = 'off'; store.set('kn_parts', '{}'); bdPartShow(0)")  # as Settings does
+    await pg.wait_for_function(f"{cards} === '1,2,3,4' && store.get('kn_parts') === '{{}}'", timeout=5000)
     await pg.evaluate("me.prefs.grid_group = 'together'; store.set('kn_board', JSON.stringify({shut: ['bbb']})); bdRender()")
     state = await pg.evaluate("[document.querySelectorAll('#bd .bd-frame').length, getComputedStyle(document.querySelector('#bd .bd-frame')).display, [...bd.wraps.values()].filter((w) => !w.hidden).length, [...document.querySelectorAll('#bd-world > .bd-card')].map((w) => w.dataset.id.slice(-1)).join()]")
     check(state[:3] == [1, "none", 4], f"Grid: together has no headings and nothing folded {state}")
