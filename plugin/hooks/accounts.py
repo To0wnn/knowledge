@@ -45,8 +45,11 @@ NOT_LINKED = {".credentials.json", ".claude.json", "backups", "daemon", "daemon.
 # stops at control characters: in a pty claude draws the link as an OSC 8 hyperlink (ESC]8;;<url>BEL<text>)
 URL = re.compile(r"https://[^\s\x00-\x1f\x7f]+/oauth/authorize\?[^\s\x00-\x1f\x7f]+")
 STATUS_TTL = 6 * 3600
+# claude opens its own browser tab (localhost callback) on the pc, also when piped: a command that does nothing instead
+NO_BROWSER = os.path.join(os.environ.get("SystemRoot", r"C:\Windows"), "System32", "where.exe") if os.name == "nt" else "true"
 LOGIN_TTL = 15 * 60  # a sign-in nobody finished: its process ends, the page shows "Sign in" again
 LOGINS: dict = {}  # name -> {"p", "url", "out", "at"}: sign-ins waiting for their code
+ENDED: dict = {}  # name -> when its browser sign-in ended well by itself (claude's localhost callback): no code needed
 _STATUS: dict = {}  # folder -> (at, {"email", "plan"})
 LOCK = threading.Lock()
 
@@ -301,6 +304,9 @@ def login(name: str, wait: float = 30, by: str = "", setup: bool = False) -> str
     """Start a browser sign-in for account `name` (made when new; "" signs the pc's own in again); the URL to open.
     The code goes in with code(). When `setup` is True, it runs `claude setup-token` in a pty to create a 1-year
     long-lived token directly; when False (default), it runs standard `claude auth login`."""
+    if setup and os.name == "nt":  # setup-token needs a terminal; Python has no pty on Windows (piped, it prints nothing)
+        raise RuntimeError("a long-lived token cannot be made from here on Windows: run `claude setup-token` in a terminal"
+                           " (on any pc) and paste the token under Change sign-in…")
     d = where(name)
     new = bool(name) and not d.is_dir()
     if name:
@@ -318,7 +324,7 @@ def login(name: str, wait: float = 30, by: str = "", setup: bool = False) -> str
             # wide, so claude never wraps the 1-year token over two lines
             fcntl.ioctl(slave, termios.TIOCSWINSZ, struct.pack("HHHH", 50, 500, 0, 0))
             p = subprocess.Popen(cmd, stdin=slave, stdout=slave, stderr=slave,
-                                 env={**e, "BROWSER": "true"}, close_fds=True)
+                                 env={**e, "BROWSER": NO_BROWSER}, close_fds=True)
             os.close(slave)
             rec = LOGINS[name] = {"p": p, "master": master, "url": "", "out": [], "raw": "", "at": time.time(), "by": by,
                                   "setup": True}
@@ -339,7 +345,7 @@ def login(name: str, wait: float = 30, by: str = "", setup: bool = False) -> str
             threading.Thread(target=read_pty, daemon=True).start()
         else:
             p = subprocess.Popen(cmd, stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
-                                 env={**e, "BROWSER": "true" if os.name != "nt" else e.get("BROWSER", "")},
+                                 env={**e, "BROWSER": NO_BROWSER},
                                  text=True, encoding="utf-8", errors="replace")
             rec = LOGINS[name] = {"p": p, "url": "", "out": [], "at": time.time(), "by": by, "setup": setup}
 
@@ -400,7 +406,14 @@ def code(name: str, text: str, wait: float = 90, by: str = "") -> str:
         rec = LOGINS.get(name)
         if not rec or rec["p"].poll() is not None:
             LOGINS.pop(name, None)
-            raise RuntimeError("no sign-in waits for a code here (it ends after 15 minutes): press Sign in again")
+            if rec and rec["p"].poll() == 0 and not rec.get("setup"):
+                ENDED[name] = time.time()
+            if time.time() - ENDED.pop(name, 0) > LOGIN_TTL:
+                raise RuntimeError("no sign-in waits for a code here (it ends after 15 minutes): press Sign in again")
+            rec = None
+    if rec is None:  # it finished through its own callback before the code came
+        return signed_in(name, d)
+    with LOCK:
         by = rec.get("by", "")
         setup = rec.get("setup", False)
         if "master" in rec:
@@ -456,7 +469,11 @@ def code(name: str, text: str, wait: float = 90, by: str = "") -> str:
         said = next((x for x in reversed(rec["out"]) if x.strip()), "no answer")
         note(name, d, error=said[-300:])
         raise RuntimeError(f"sign-in failed: {said[-200:]}")
+    return signed_in(name, d)
 
+
+def signed_in(name: str, d: Path) -> str:
+    """After a browser sign-in: it replaces a token or key, and the account's info says who is signed in."""
     for f, _, _, _ in SECRETS.values():  # a browser sign-in replaces a token or key (the pc's own: kept beside ~/.claude)
         (kept(name) / f).unlink(missing_ok=True)
     if name:
@@ -543,10 +560,19 @@ def listing(windows_of=None, now: float = 0) -> list:
     sign-in state, a sign-in link waiting for its code, its usage windows (windows_of(name)) and, for an API key, what
     it spent this month and its budget."""
     now = now or time.time()
+    done = []
     with LOCK:
         for n, rec in list(LOGINS.items()):
             if now - rec["at"] > LOGIN_TTL or rec["p"].poll() is not None:
+                if rec["p"].poll() == 0 and not rec.get("setup"):
+                    done.append(n)
+                    ENDED[n] = now
                 _drop(n)
+    for n in done:  # signed in through its own callback: no code will come
+        try:
+            signed_in(n, where(n))
+        except (OSError, ValueError, RuntimeError):
+            pass
     win = lambda n: [list(w) for w in windows_of(n)] if windows_of else []
     ok, oi = own_kind(), info(kept(""))
     s = status(MAIN)
@@ -675,6 +701,10 @@ def self_test():
             "d = os.environ.get('CLAUDE_CONFIG_DIR', '')\n"
             "if sys.argv[1:3] == ['auth', 'login'] and d.endswith('broken'):\n"
             "    print('Error: network'); sys.exit(1)\n"
+            "elif sys.argv[1:3] == ['auth', 'login'] and d.endswith('callback'):  # signed in in the pc's own browser\n"
+            "    print('If the browser did not open, visit: https://claude.com/cai/oauth/authorize?code=true&state=x', flush=True)\n"
+            "    import time; time.sleep(0.5)\n"
+            "    json.dump({'claudeAiOauth': {'accessToken': 'cb'}}, open(os.path.join(d, '.credentials.json'), 'w')); print('Login successful.')\n"
             "elif sys.argv[1:3] == ['auth', 'login']:\n"
             "    print('If the browser did not open, visit: https://claude.com/cai/oauth/authorize?code=true&state=x', flush=True)\n"
             "    print('Paste code here if prompted > ', end='', flush=True)\n"
@@ -727,22 +757,42 @@ def self_test():
         assert login("") == url and {a["id"]: a for a in listing()}[""]["login"] == url, "the pc's own signs in again the same way"
         assert code("", "good#code").startswith("own: signed in") and not (MAIN / INFO).exists(), "no file of ours in ~/.claude"
         assert json.loads((MAIN / ".credentials.json").read_text())["claudeAiOauth"]["accessToken"] == "new"
+        login("callback")
+        LOGINS["callback"]["p"].wait(timeout=10)
+        assert code("callback", "anything") == "callback: signed in as w@example.org", "signed in by its own callback: no error"
+        login("callback")
+        LOGINS["callback"]["p"].wait(timeout=10)
+        assert {a["id"]: a for a in listing()}["callback"]["email"] == "w@example.org" and "callback" not in LOGINS
+        assert code("callback", "x").startswith("callback: signed in"), "also after the list dropped the ended sign-in"
+        try:
+            code("callback", "x")
+            raise AssertionError("only once")
+        except RuntimeError:
+            pass
+        remove("callback")
         assert logout_own() == "own: signed out" and not (MAIN / ".credentials.json").exists()
         # setup-token creates a 1-year token directly via the browser flow
-        login("tok1", setup=True)
-        t0 = time.time()
-        try:
-            code("tok1", "bad")
-            raise AssertionError("a refused code must fail")
-        except RuntimeError as e:
-            assert "OAuth error: That code was not accepted" in str(e) and time.time() - t0 < 10, (str(e), time.time() - t0)
-        u2 = login("tok1", setup=True)
-        assert u2 == url and {a["id"]: a for a in listing()}["tok1"]["login"] == url
-        assert code("tok1", "good#code").startswith("tok1: long-lived token saved")
-        assert {a["id"]: a for a in listing()}["tok1"]["kind"] == "token"
-        assert (kept("tok1") / TOKEN).read_text(encoding="utf-8").endswith("abcdef0123456789"), "the whole token, though printed in two parts"
-        remove("tok1")
-        login("tok3", setup=True)
+        if os.name == "nt":  # no pty: refused at once, with the way that works
+            try:
+                login("tok1", setup=True)
+                raise AssertionError("setup-token on Windows must be refused")
+            except RuntimeError as e:
+                assert "claude setup-token" in str(e) and "tok1" not in names(), e
+        else:
+            login("tok1", setup=True)
+            t0 = time.time()
+            try:
+                code("tok1", "bad")
+                raise AssertionError("a refused code must fail")
+            except RuntimeError as e:
+                assert "OAuth error: That code was not accepted" in str(e) and time.time() - t0 < 10, (str(e), time.time() - t0)
+            u2 = login("tok1", setup=True)
+            assert u2 == url and {a["id"]: a for a in listing()}["tok1"]["login"] == url
+            assert code("tok1", "good#code").startswith("tok1: long-lived token saved")
+            assert {a["id"]: a for a in listing()}["tok1"]["kind"] == "token"
+            assert (kept("tok1") / TOKEN).read_text(encoding="utf-8").endswith("abcdef0123456789"), "the whole token, though printed in two parts"
+            remove("tok1")
+        login("tok3")
         p3 = LOGINS["tok3"]["p"]
         assert cancel("tok3") == "tok3: sign-in cancelled" and "login" not in {a["id"]: a for a in listing()}["tok3"], \
             "a cancelled sign-in leaves the page"

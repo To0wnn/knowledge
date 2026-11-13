@@ -233,8 +233,14 @@ fixed remote actions and relays chats. Installing it is part of the client setup
   pc's own sign-in and each extra account, with its plan and the usage of its chat turns. Add account… takes a name
   (a-z, 0-9, -) and one of three ways in (Change sign-in… on an account's row switches it to another):
   - **Sign in with the browser:** the companion runs `claude auth login` in the account's folder; its sign-in link
-    shows in the row (Open sign-in). An inline input with Confirm lets you paste the code from claude.com.
-  - **Switch to long-lived token…:** runs `claude setup-token` in a pty on the pc; Open sign-in opens the authorization
+    shows in the row (Open sign-in). An inline input with Confirm lets you paste the code from claude.com. Claude
+    also tries to open its own browser tab on the pc (a localhost callback), even with its output piped; the companion
+    gives it a `BROWSER` that does nothing (`true`, on Windows `where.exe`), so nobody at the pc can sign the account
+    in as themselves. A sign-in that still ends by itself that way counts as signed in: a code sent after it gets
+    "signed in", not "no sign-in waits".
+  - **Switch to long-lived token…:** (Linux and macOS; on Windows Python has no pty and a piped `setup-token` prints
+    nothing, so it is refused at once: run `claude setup-token` in a terminal and paste the token under Change
+    sign-in…) runs `claude setup-token` in a pty on the pc; Open sign-in opens the authorization
     link in your browser, and pasting the code into the inline input and clicking Confirm saves the 1-year token. In a
     pty claude draws the link as an OSC 8 hyperlink (`ESC]8;;<url>BEL<text>`); the link is cut at the first control
     character, else the page gets a broken `state` and says "Sign-in did not complete". Its TUI reads raw keys, so the
