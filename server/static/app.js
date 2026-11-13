@@ -1733,6 +1733,8 @@ function accountTiming(a) {
 const accountSignedIn = (a) => !!(a.pc || a.email || a.kind);
 // The order people pick from: their main account first, signed-out ones last, otherwise as the pc lists them.
 const accountOrder = (list, main) => [...list].sort((a, b) => (b.id === main) - (a.id === main) || accountSignedIn(b) - accountSignedIn(a));
+// The pc's own sign-in after a sign-out: an empty slot, hidden unless it is main or a sign-in for it is under way.
+const accountGone = (a, main) => a.id === "" && !accountSignedIn(a) && main !== "" && !a.login && !a.error;
 function accountUsage(a) {
   if (!accountSignedIn(a)) return "";
   if (a.kind === "apikey") return a.budget ? `$${(a.spent || 0).toFixed(2)} of $${a.budget} (${Math.round(((a.spent || 0) / a.budget) * 100)}%)` : `$${(a.spent || 0).toFixed(2)} spent this month`;
