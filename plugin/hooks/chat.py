@@ -36,6 +36,7 @@ HOOKS = Path(__file__).resolve().parent
 sys.path.insert(0, str(HOOKS))
 import workers  # noqa: E402
 import accounts  # noqa: E402
+import agy_accounts  # noqa: E402
 import admin as admin_rights  # noqa: E402
 
 RUNNING: dict = {}  # chat id -> {pid, ident, stop, allow, folder}: the turns this companion runs now
@@ -192,9 +193,10 @@ def choice(item: dict) -> tuple:
 
 
 def account_of(item: dict) -> str:
-    """The extra Claude account a chat asked for ("" = the pc's own); accounts.env checks the name again."""
+    """The extra Claude or agy account a chat asked for ("" = the pc's own); accounts.env / agy_accounts.env check
+    the name again."""
     a = str(item.get("account") or "")
-    return a if item.get("agent") == "claude" and accounts.ID.fullmatch(a) else ""
+    return a if item.get("agent") in ("claude", "agy") and accounts.ID.fullmatch(a) else ""
 
 
 def approval_config(cid: str) -> str:
@@ -1216,6 +1218,8 @@ class Live:
         # the token or key the pc's environment holds
         if self.agent == "claude" and (extra := accounts.env(self.account)):
             env = {**{k: v for k, v in env.items() if k not in accounts.AUTH_ENV}, **extra}
+        if self.agent == "agy" and self.account:  # its own folder (agy acp --gemini-dir), never the pc's keyring
+            env = {**env, **agy_accounts.env(self.account)}
         if self.admin is False:  # admin is on here, not for this chat (a guest's): it may not raise its rights (Linux)
             cmd = admin_rights.no_raise(cmd)
         self.p = Hosted(LIVE_DIR / f"{self.cid}-{secrets.token_hex(4)}", cmd, self.folder, env if yolo else workers.git_safe_env(env),
@@ -1761,8 +1765,15 @@ class AgyLive(CodexLive):
     line), without it `agy acp` (one session/prompt at a time, messages sent during a turn steer it over ACP). Force
     ends that agy and a new one takes the conversation on (--conversation / session/load); Stop ends the turn."""
 
+    @property
+    def stream(self) -> bool:
+        """agy's own stream-json line (YOLO): not for an extra account, whose --gemini-dir only `agy acp` takes."""
+        return self.yolo and not self.account
+
     def command(self, exe: str) -> list:
-        return argv("agy", exe, True, self.st["session"], self.cid, self.pick[0], "") if self.yolo else [exe, "acp"]
+        if self.stream:
+            return argv("agy", exe, True, self.st["session"], self.cid, self.pick[0], "")
+        return [exe, "acp", *(["--dangerously-skip-permissions"] if self.yolo else []), *agy_accounts.flags(self.account)]
 
     def started(self):
         self.res, self.ids, self.turn_id, self.lines, self.answered, self.ended = {}, itertools.count(1), "", [], 0, set()
@@ -1770,7 +1781,7 @@ class AgyLive(CodexLive):
         self.active_box, self.active_id = None, None
         self.bg, self.bg_out = {}, {}
         self.subs, self.sub_convs = set(), {}
-        if self.yolo:
+        if self.stream:
             threading.Thread(target=self.read_stream, daemon=True).start()
             return
         self.note, self.request = agy_handlers(self.cid, self.folder, self.replayed)
@@ -1790,7 +1801,7 @@ class AgyLive(CodexLive):
     def live_state(self) -> dict:
         w = list(self.wtexts)
         return {**super().live_state(), "wtexts": w[-20:], "wbase": max(0, len(w) - 20), "lines": list(self.lines),
-                "prompt": (self.active_id or self.calls.get("session/prompt")) if self.turn_open and not self.yolo else None}
+                "prompt": (self.active_id or self.calls.get("session/prompt")) if self.turn_open and not self.stream else None}
 
     def resumed(self, s: dict, new_in: list):
         self.res, self.ids, self.turn_id, self.ended, self.calls = {}, itertools.count(s["next_id"]), "", set(), {}
@@ -1803,7 +1814,7 @@ class AgyLive(CodexLive):
         self.subs, self.sub_convs = set(s.get("subs") or []), {}
         # only the last texts are kept: earlier slots stay empty (a Force carries what was not answered, never those)
         self.wtexts = [""] * s["wbase"] + s["wtexts"]
-        if self.yolo:
+        if self.stream:
             fresh = [x["message"].get("content", "") for x in new_in if x.get("event") == "user" and isinstance(x.get("message"), dict)]
             self.written += len(fresh)
             self.wtexts += fresh
@@ -1962,7 +1973,7 @@ class AgyLive(CodexLive):
             self.last = time.time()
             if mode == "force" and self.busy and not self.restarting:  # no interrupt in agy: a new process takes the conversation on
                 # what was written or waits but not answered goes along after the Force (the step it was on ends here)
-                waiting = self.wtexts[self.answered + 1:] if self.yolo else list(self.lines)
+                waiting = self.wtexts[self.answered + 1:] if self.stream else list(self.lines)
                 self.lines.clear()
                 self.force_text, self.carry = text, waiting + self.carry
                 self.restart()
@@ -1971,7 +1982,7 @@ class AgyLive(CodexLive):
             if self.restarting:  # a new agy takes the conversation on: this goes along to it
                 self.carry.append(text)
                 return
-            if self.yolo:
+            if self.stream:
                 self.written += 1
                 self.wtexts.append(text)
                 self.write(stdin_for("agy", text))
@@ -2046,16 +2057,16 @@ class AgyLive(CodexLive):
         self.log("chat", f"agy: live chat ended for a Force (exit {code})", f"chat {self.cid}")
 
 
-def uses(account: str) -> list:
-    """The chats whose agent works on Claude account `account` now (a turn, a subagent or a shell of it running)."""
-    return [cid for cid, lv in list(LIVE.items()) if getattr(lv, "account", "") == account and lv.alive()
+def uses(account: str, agent: str = "claude") -> list:
+    """The chats whose agent works on `agent`'s account `account` now (a turn, a subagent or a shell of it running)."""
+    return [cid for cid, lv in list(LIVE.items()) if getattr(lv, "account", "") == account and lv.agent == agent and lv.alive()
             and (lv.busy or lv.turn_open or lv.subs or lv.bg)]
 
 
-def end_idle(account: str):
+def end_idle(account: str, agent: str = "claude"):
     """End the idle live chats on `account` (its folder is about to go); their next message resumes them."""
     for cid, lv in list(LIVE.items()):
-        if getattr(lv, "account", "") == account and not getattr(lv, "restarting", False):
+        if getattr(lv, "account", "") == account and lv.agent == agent and not getattr(lv, "restarting", False):
             LIVE.pop(cid, None)
             lv.close()
 
@@ -2180,7 +2191,7 @@ def start(item: dict, post, log, linked, yolo, fetch=None):
                 and STOPS.get(cid, [gen])[0] == gen:
             if not told:
                 told = True
-                post({"chat": cid, "events": [{"kind": "info", "text": "Waits: the turn that runs on another Claude account ends first."}]})
+                post({"chat": cid, "events": [{"kind": "info", "text": "Waits: the turn that runs on another account ends first."}]})
             time.sleep(TURN_WAIT)
         if (st := STOPS.get(cid, [0, True]))[0] != gen:  # Stopped while its files came: it never starts
             if not st[1]:  # nothing ran here to end the turn: this message's turn ends now, once
@@ -2261,7 +2272,16 @@ def self_test():
     assert spent == [("werk", 0.25), ("werk", 0.5), ("werk", 0.1)], spent
     assert account_of({"agent": "claude", "account": "werk"}) == "werk", "a Claude chat runs under the account it picked"
     assert account_of({"agent": "codex", "account": "werk"}) == "" and account_of({"agent": "claude", "account": "../x"}) == "", \
-        "only Claude has accounts, and only by a plain name"
+        "only Claude and agy have accounts, and only by a plain name"
+    assert account_of({"agent": "agy", "account": "werk"}) == "werk"
+    lv = AgyLive.__new__(AgyLive)
+    lv.yolo, lv.account, lv.st, lv.cid, lv.pick = True, "werk", {"session": ""}, "c", ("", "")
+    assert lv.command("agy") == ["agy", "acp", "--dangerously-skip-permissions", "--gemini-dir", str(agy_accounts.folder("werk"))], \
+        "an agy chat on an extra account runs over ACP with its own folder, YOLO as ACP's flag"
+    lv.yolo = False
+    assert lv.command("agy") == ["agy", "acp", "--gemini-dir", str(agy_accounts.folder("werk"))]
+    lv.yolo, lv.account = True, ""
+    assert lv.stream and lv.command("agy")[1] != "acp", "the pc's own YOLO chat keeps agy's stream-json line"
     asks_tmp = tempfile.TemporaryDirectory()  # never the real companion's asks folder
     workers.ASKS = Path(asks_tmp.name)
     f = workers.remember_ask("c-x", "zet het in D:\\Games")
@@ -2682,8 +2702,8 @@ def self_test():
                     assert ran == [("d", "later")] and len(posts) == 1, (ran, posts)
                     # a joined person's message waits for the turn that runs on the starter's Claude account
                     LIVE.clear()
-                    acc = LIVE["e"] = types.SimpleNamespace(busy=True, turn_open=False, subs=set(), bg={}, account="werk", alive=lambda: True)
-                    assert uses("werk") == ["e"] and uses("") == []
+                    acc = LIVE["e"] = types.SimpleNamespace(busy=True, turn_open=False, subs=set(), bg={}, account="werk", agent="claude", alive=lambda: True)
+                    assert uses("werk") == ["e"] and uses("") == [] and uses("werk", "agy") == [], "an agy account of the same name is another"
                     posts.clear(); ran.clear()
                     start({"chat": "e", "agent": "claude", "text": "mine"}, posts.append, None, None, None)
                     time.sleep(0.2)

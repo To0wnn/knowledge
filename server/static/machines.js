@@ -568,12 +568,13 @@ function workersCell(m, a) {
 // its workers run under it). Each person sees only their own accounts; the pc's owner sees who added the others.
 const usesPc = (m) => Object.values(m.shared || {}).some((x) => ["use", "yolo", "admin"].includes(x));
 const accountSteer = (m) => !!m.online && !!m.companion && !m.old && (steersAgent(m, "claude") || !m.own && usesPc(m));
-async function accountMain(m, account) {
-  try { await api("/ui/api/machines/claude-main", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ machine: m.id, account }) }); }
+async function accountMain(m, account, agent = "claude") {
+  try { await api("/ui/api/machines/claude-main", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ machine: m.id, account, agent }) }); }
   catch (e) { toast(e.message); }
   await loadMachines();
 }
-function accountsCell(m) {
+function accountsCell(m, agent = "claude") {
+  if (agent === "agy") return agyAccountsCell(m);
   const ag = m.agents?.claude;
   if (!ag) return null;
   if (!ag.accounts) return val(steersAgent(m, "claude") ? "Update the plugin to add accounts" : "—", "muted");
@@ -674,6 +675,54 @@ function accountsCell(m) {
     const addRow = el("div", "mx-accounts-add");
     addRow.append(machineButton("+ Add account…", "Another Claude account on this pc, for your chats to pick", () => accountAdd(m), false, "btn small quiet"));
     if (ownGone && (ownGone.mine !== false || m.own)) addRow.append(" ", machineButton("Sign this pc's own in…", "The pc's own Claude (~/.claude, also its terminal) is signed out", () => accountAdd(m, ""), false, "btn small quiet"));
+    box.append(addRow);
+  }
+  return box;
+}
+// agy accounts on a Linux pc (agy_accounts.py): extra Google accounts for chats, signed in on Google's page whose code
+// comes back here. The pc's own sign-in stays agy's own; workers keep running on it.
+function agyAccountsCell(m) {
+  const ag = m.agents?.agy;
+  if (!ag) return null;
+  if (!ag.accounts) return val(steersAgent(m, "agy") ? "Linux only, with an updated plugin" : "—", "muted");
+  const box = el("div", "mx-accounts"), steer = !!m.online && !!m.companion && !m.old && (steersAgent(m, "agy") || !m.own && usesPc(m)), main = m.agyMain || "";
+  for (const x of accountOrder(ag.accounts, main)) {
+    const line = el("div", "mx-account"), mine = x.mine !== false;
+    line.append(el("b", null, x.id || "own"), " ", val(!x.id ? "this pc's own sign-in" : x.email || (x.kind ? "signed in" : "not signed in"), !x.id || x.kind ? "" : "mx-diff"));
+    if (mine && x.id === main) { const p = el("span", "pill", "main"); p.title = "Default account for your new agy chats on this pc"; line.append(p); }
+    if (!mine) line.append(" ", val(`added by ${x.by || "?"}`, "muted"));
+    if (x.error) line.append(el("p", "machine-error", x.error));
+    const acts = [], busy = pendingAction(m, "agy_login", (y) => y.account === x.id) || pendingAction(m, "agy_code", (y) => y.account === x.id);
+    if (steer && mine && x.id !== main) {
+      const b = actionButton("Make main", () => accountMain(m, x.id, "agy"), "btn small quiet");
+      b.title = "Make default account for your new agy chats on this pc"; acts.push(b);
+    }
+    if (steer && mine && x.id && x.login) {
+      const a = el("a", "btn small primary", "Open sign-in"); a.href = x.login; a.target = "_blank"; a.rel = "noopener noreferrer";
+      a.title = "Sign in with the Google account in a new tab, then paste the code it shows (or the address of the page you land on) here";
+      const inp = el("input"); inp.className = "input small"; inp.placeholder = "code or address"; inp.autocomplete = "off";
+      inp.setAttribute("aria-label", "Code from the Google sign-in");
+      const ok = machineButton("Confirm", "Finish the sign-in with this code", () => inp.value.trim() ? machineAction(m, "agy_code", { account: x.id, code: inp.value.trim() }) : null, busy);
+      inp.onkeydown = (e) => { if (e.key === "Enter") { e.preventDefault(); ok.click(); } };
+      const stop = machineButton("✕", "Cancel this sign-in", () => machineAction(m, "agy_cancel", { account: x.id }),
+        busy || pendingAction(m, "agy_cancel", (y) => y.account === x.id), "btn small quiet");
+      stop.setAttribute("aria-label", "Cancel sign-in");
+      acts.push(a, inp, ok, stop);
+    } else if (steer && mine && x.id) {
+      acts.push(machineButton(x.kind ? "Sign in again" : "Sign in", `Sign ${x.id} in with Google`, () => machineAction(m, "agy_login", { account: x.id }), busy, x.kind ? "btn small quiet" : "btn small"));
+    }
+    if (x.removing) acts.push(el("span", "muted", "Removed once its chats end"));
+    else if (steer && x.id && (mine || m.own)) acts.push(machineButton("Remove", `Remove ${x.id} from ${m.label}`, () => confirm(`Remove the agy account ${x.id} from ${m.label}? A chat running on it finishes first; after that, chats that use it go back to the pc's own sign-in.`) ? machineAction(m, "agy_remove", { account: x.id }) : null,
+      pendingAction(m, "agy_remove", (y) => y.account === x.id), "btn small quiet"));
+    if (acts.length) { const row = el("div", "mx-pop-acts"); row.append(...acts); line.append(row); }
+    box.append(line);
+  }
+  if (steer) {
+    const addRow = el("div", "mx-accounts-add"), name = el("input");
+    name.required = true; name.pattern = "[a-z0-9][a-z0-9\\-]{0,30}"; name.placeholder = "e.g. work"; name.title = "a-z, 0-9 and -";
+    addRow.append(machineButton("+ Add account…", "Another Google account for agy on this pc, for your chats to pick", () => accountForm(`Add an agy account on ${m.label}`,
+      ["Sign in with the Google account in your browser; its page then shows a code to paste here. Chats on this pc can then run under it (the model chip). Settings, plugins and skills stay the pc's own; workers keep the pc's own sign-in."],
+      [["Name", name]], "Add", () => machineAction(m, "agy_login", { account: name.value })), false, "btn small quiet"));
     box.append(addRow);
   }
   return box;
@@ -810,13 +859,13 @@ function compareTable(pcs, here, mine) {
     const head = mxRow("mx-agent", name, []);
     if (!guest) head.insertBefore(meters(pcs, a), head.lastChild);
     grid.append(head);
-    if (guest) { grid.append(row("", "Accounts", pcs.map((m) => accountsCell(m)))); continue; }
+    if (guest) { if (a === "claude" || a === "agy") grid.append(row("", "Accounts", pcs.map((m) => accountsCell(m, a)))); continue; }
     grid.append(row("", "Version", pcs.map((m) => versionCell(m, a))));
     grid.append(row("", "Plugin", pcs.map((m) => pluginCell(m, a))));
     grid.append(row("", "Hooks", pcs.map((m) => hooksCell(m, a))));
     grid.append(row("", "YOLO", pcs.map((m) => yoloCell(m, a))));
     grid.append(row("", "Workers", pcs.map((m) => workersCell(m, a))));
-    if (a === "claude") grid.append(row("", "Accounts", pcs.map((m) => accountsCell(m))));
+    if (a === "claude" || a === "agy") grid.append(row("", "Accounts", pcs.map((m) => accountsCell(m, a))));
   }
   const ids = [...new Set(pcs.flatMap((m) => Object.keys(m.companion?.tools || {})))].sort((x, y) => {
     const name = (id) => pcs.map((m) => m.companion?.tools?.[id]?.name).find(Boolean) || id;

@@ -48,6 +48,7 @@ HOOKS = Path(__file__).resolve().parent
 sys.path.insert(0, str(HOOKS))
 import model_settings  # noqa: E402  (next to this file)
 import accounts  # noqa: E402  (extra Claude accounts, signed in from the web UI)
+import agy_accounts  # noqa: E402  (extra agy accounts, Linux)
 import admin as admin_rights  # noqa: E402  (admin rights for chats, switched on once per pc)
 import agent_hooks  # noqa: E402  (the wake code and the session registry)
 import awake  # noqa: E402  (no idle sleep while an agent works)
@@ -1071,6 +1072,15 @@ def claude_accounts(now: float, ws: dict) -> list:
         return []
 
 
+def agy_listing(now: float) -> list:
+    """The agy accounts on this pc for the Machines list (agy_accounts.py); [] when they cannot be read now."""
+    try:
+        return agy_accounts.listing(now)
+    except Exception as e:  # the report goes on without them
+        log("error", "Could not read the agy accounts", f"{type(e).__name__}: {e}"[:300])
+        return []
+
+
 def kept_agy(f: Path, now: float) -> list:
     """agy's kept "<group> 5h|7d" windows; one that reset shows 0% until a new reading: using agy again renews the
     token the cloud call needs (on a pc without a keyring `agy models` does not), so no reading means no use since.
@@ -1909,6 +1919,7 @@ def report(tok: str, ws: dict, lim: dict, wait: list, now: float, waiting=None, 
                      "resets": (resets or {}).get(a), "windows": (windows or {}).get(a, []), **({"plugin": v} if (v := plugin_version(a)) else {}),  # known before a session
                      **({"cli": v} if (v := cli_version(a, now)) else {}), **({"channel": claude_channel()} if a == "claude" else {}),
                      **({"accounts": claude_accounts(now, ws)} if a == "claude" else {}),
+                     **({"accounts": agy_listing(now)} if a == "agy" and agy_accounts.SUPPORTED else {}),
                      "models": chat.models(a),  # what a chat may pick (cached for hours)
                      # the slash commands its last live chat here offered: long, so only when changed (the server keeps them)
                      **({"commands": c} if (c := chat.commands(a)) != _COMMANDS_SENT.get(a, (0, None))[1] or now - _COMMANDS_SENT[a][0] > 6 * 3600 else {}),
@@ -2102,7 +2113,16 @@ def account_busy(name: str) -> list:
 
 
 def remove_waiting():
-    """Remove each Claude account whose Remove waited for its chats and workers; once, loudly when it fails."""
+    """Remove each Claude or agy account whose Remove waited for its chats and workers; once, loudly when it fails."""
+    for name in agy_accounts.removing():
+        if chat.uses(name, "agy"):
+            continue
+        try:
+            chat.end_idle(name, "agy")
+            log("remote", "agy account removed after its chats ended", agy_accounts.remove(name))
+        except Exception as e:
+            log("error", f"agy account {name} could not be removed", f"{type(e).__name__}: {e}"[:300])
+            accounts.write(agy_accounts.folder(name) / agy_accounts.INFO, {**accounts.info(agy_accounts.folder(name)), "removing": False, "error": f"Remove failed: {e}"[:300]})
     for name in accounts.removing():
         if account_busy(name):
             continue
@@ -2233,6 +2253,20 @@ def run_action(a: dict) -> str:
             return accounts.remove_later(name)
         chat.end_idle(name)  # an idle live chat on it would hold its folder
         return accounts.remove(name)
+    if act in ("agy_login", "agy_cancel", "agy_code", "agy_remove"):  # extra agy accounts (agy_accounts.py)
+        name = str(args.get("account", ""))
+        agy_accounts.may(name, str(a.get("by") or ""), a.get("pc_owner") is True, act == "agy_remove")
+        if act == "agy_login":
+            agy_accounts.login(name, by=str(a.get("by") or ""))
+            return f"{name}: open the sign-in link under Machines, then paste the code there"
+        if act == "agy_cancel":
+            return agy_accounts.cancel(name)
+        if act == "agy_code":
+            return agy_accounts.code(name, str(args.get("code", "")))
+        if chat.uses(name, "agy"):  # in use: it goes once its chats end (remove_waiting)
+            return agy_accounts.remove_later(name)
+        chat.end_idle(name, "agy")
+        return agy_accounts.remove(name)
     if act == "trust_hooks":
         return trust(agent)
     if act == "link_folder":
@@ -2388,7 +2422,7 @@ def file_request(tok: str, f: dict):
         log("error", "Could not send a file answer to the web UI", f"{type(e).__name__}: {e}"[:300])
 
 
-SLOW_ACTIONS = {"claude_login", "claude_code"}  # a sign-in waits on claude itself; it changes only its own account
+SLOW_ACTIONS = {"claude_login", "claude_code", "agy_login", "agy_code"}  # a sign-in waits on claude or agy itself; it changes only its own account
 
 
 def act_once(tok: str, a: dict, lock):
@@ -2444,7 +2478,7 @@ def live_loop():
         time.sleep(LIVE_EVERY)
 
 
-STATE_ACTIONS = {"claude_budget", "claude_cancel", "claude_logout", "claude_login", "claude_code", "claude_token", "claude_key", "claude_remove", "install_tool", "remove_tool", "tool_auto", "yolo", "admin", "workers_allowed", "max_agents", "link_folder", "unlink_folder", "trust_hooks", "stop_worker", "restart", "merge", "takeover", "archive_worker", "apply_models"}
+STATE_ACTIONS = {"agy_login", "agy_cancel", "agy_code", "agy_remove", "claude_budget", "claude_cancel", "claude_logout", "claude_login", "claude_code", "claude_token", "claude_key", "claude_remove", "install_tool", "remove_tool", "tool_auto", "yolo", "admin", "workers_allowed", "max_agents", "link_folder", "unlink_folder", "trust_hooks", "stop_worker", "restart", "merge", "takeover", "archive_worker", "apply_models"}
 
 
 # ---------------------------------------------------------------- the page

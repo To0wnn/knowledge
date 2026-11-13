@@ -292,7 +292,30 @@ fixed remote actions and relays chats. Installing it is part of the client setup
   handed to the pc once and then replaced by "(hidden)" in the queue; one the pc did not fetch within 10 minutes
   (`SECRET_WAIT`) is hidden and failed by the server's background check. It never shows on the page, in the audit log or
   in the companion's activity.
-- **Not (yet):** Codex and agy accounts are not covered.
+- **Not (yet):** Codex accounts are not covered; agy's are below.
+
+## agy accounts per pc (Linux)
+
+- **More than one agy account on a Linux pc** (`plugin/hooks/agy_accounts.py`): Machines > agy > Accounts lists the
+  pc's own sign-in and each extra Google account. Add account… takes a name; the companion runs `agy acp --login`
+  for it, its Google link shows in the row (Open sign-in), and the code Google's page shows (or the whole address of
+  the page you land on) goes into the inline input and Confirm. ✕ stops a waiting sign-in, Remove takes an account
+  off (after its running chats end, as for Claude). Who added it, who sees and picks it, Make main (that person's new
+  agy chats there start on it; `agy_main.json`) and the actions on a shared pc follow the Claude rules above.
+- **How a chat uses it:** the model chip of an agy chat gets the Account row; a turn on an extra account always runs
+  over `agy acp --gemini-dir ~/.knowledge/agy-accounts/<name>` (with YOLO as ACP's `--dangerously-skip-permissions`),
+  because agy's own `-p` line takes no folder of its own. That folder links the folders of `~/.gemini` (`config` with
+  plugins and skills, `antigravity-cli/conversations` and `brain`, so a conversation resumes after a switch) and
+  `GEMINI.md` and agy's `settings.json`; its sign-in, logs and databases are its own (a linked database file would get
+  a second `-wal` beside the link; a linked folder keeps it in the real one).
+- **Why the dead session bus:** agy keeps its sign-in in the OS keyring (service `gemini`, user `antigravity`)
+  whatever `--gemini-dir` or `--app-data-dir` it gets (tested with agy 1.5.8, 13 Nov 2026), and only falls back to a
+  file in its folder when the keyring cannot be reached. So every run of an extra account, its sign-in too, gets
+  `DBUS_SESSION_BUS_ADDRESS=unix:path=/nonexistent/...`: without it, it would run as the pc's own account, and a
+  sign-in would replace the pc's own in the keyring. The agent's own shell commands inherit that (no keyring for
+  them, e.g. a git credential helper on libsecret); the knowledge plugin gets its token as `KNOWLEDGE_TOKEN`.
+- **Not (yet):** macOS and Windows (the Keychain and Credential Manager cannot be hidden from one process), workers
+  (they keep the pc's own sign-in), an API key (`GEMINI_API_KEY`), and the usage of an extra account.
 
 ## Hook failures
 

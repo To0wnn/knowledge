@@ -988,7 +988,7 @@ function ckCard(meta) {
       else {
         // only a choice made here: a saved model the pc no longer lists must not turn into Default unasked
         const pick = card.pick?.touched ? { model: card.pick.id, effort: card.pick.effort, ...(card.pick.agent !== card.meta.agent ? { agent: card.pick.agent } : {}),
-          ...(card.pick.agent === "claude" ? { account: card.pick.account || "" } : {}) } : {};
+          ...(ACC_AGENTS.includes(card.pick.agent) ? { account: card.pick.account || "" } : {}) } : {};
         // mode: Send into the turn (a live agent) or after it (others); Queue or Force from their buttons
         await api("/ui/api/chat/send", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ machine: card.meta.machine, id: card.meta.id, text, mode, ...pick }) });
         Object.assign(card.meta, pick); card.pick = null;
@@ -1285,10 +1285,12 @@ function ckCatalog(pcs) { // one entry per agent and model: [{agent, id, name, e
 }
 const levels = (m) => CK_EFFORTS.filter((e) => (m.efforts || []).includes(e));
 const ckModelOf = (card) => (card.catalog || []).find((x) => x.agent === card.pick?.agent && x.id === card.pick?.id);
-// The extra Claude accounts on the chat's pc (Machines > Claude Code > Accounts); a draft's pc follows its folder.
-// Your own Claude accounts on the chat's pc ("" = its own sign-in first); a draft's pc follows its folder.
+// Your own Claude or agy accounts on the chat's pc (Machines > Accounts; "" = its own sign-in first); a draft's pc
+// follows its folder.
+const ACC_AGENTS = ["claude", "agy"];
 const ckAccPc = (card) => ckPc(card.meta.draft ? (card.where_ || "").split("\n")[0] : card.meta.machine);
-const ckAllAccounts = (card) => (ckAccPc(card)?.agents?.claude?.accounts || []).filter((a) => a.mine !== false);
+const ckAccAgent = (card) => card.pick?.agent || card.meta.agent;
+const ckAllAccounts = (card) => (ckAccPc(card)?.agents?.[ckAccAgent(card)]?.accounts || []).filter((a) => a.mine !== false);
 const ckAccounts = (card) => ckAllAccounts(card).filter((a) => a.id);
 function ckPicker(card) {
   const draft = card.meta.draft, mine = ckPc(card.meta.machine);
@@ -1306,8 +1308,8 @@ function ckPicker(card) {
       : draft ? null : { agent: card.meta.agent, id: "", effort: "" }; // a model the pc no longer lists: the agent's own, never another agent's
   }
   if (draft && !card.where_) { const f = ckDraftFolders(card)[0]; if (f) card.where_ = `${f.machine}\n${f.path}`; } // its pc first: the accounts are that pc's
-  const accounts = card.pick?.agent === "claude" ? ckAccounts(card) : [];
-  if (draft && card.pick && !card.pick.accountSet) card.pick = { ...card.pick, account: ckAccPc(card)?.claudeMain || "" }; // your main account there
+  const accounts = ACC_AGENTS.includes(card.pick?.agent) ? ckAccounts(card) : [];
+  if (draft && card.pick && !card.pick.accountSet) card.pick = { ...card.pick, account: ckAccPc(card)?.[`${card.pick.agent}Main`] || "" }; // your main account there
   if (card.pick?.account && !accounts.some((a) => a.id === card.pick.account)) card.pick = { ...card.pick, account: "" }; // gone from that pc
   const sig = JSON.stringify([card.catalog.map((x) => [x.agent, x.id, x.efforts, x.default, x.pcs]), card.pick, card.meta.agent, draft && agentProject, accounts.map((a) => a.id)]);
   if (card.picks.dataset.sig === sig) return; // unchanged: a poll must not close an open panel
@@ -1335,7 +1337,8 @@ function ckPicker(card) {
       b.title = other ? `${AGENT_NAME[m.agent] || m.agent}: continue this chat there (it gets the chat so far and starts its own session)` : m.id;
       b.onclick = (e) => {
         e.stopPropagation(); // the chip is rebuilt: the outside-click listener would see a detached button and close it
-        card.pick = { agent: m.agent, id: m.id, effort: m.default || "", account: m.agent === "claude" ? card.pick?.account || "" : "", touched: true }; ckPicker(card); ckDraftWhere(card);
+        const same = m.agent === card.pick?.agent; // another agent: its own accounts (a draft starts on your main one there)
+        card.pick = { agent: m.agent, id: m.id, effort: m.default || "", account: same ? card.pick.account || "" : "", ...(same && card.pick.accountSet ? { accountSet: true } : {}), touched: true }; ckPicker(card); ckDraftWhere(card);
         const again = card.picks.querySelector("details.ck-model"); if (again && levels(m).length) again.open = true; // then the effort
       };
       opts.append(b);
@@ -1354,17 +1357,17 @@ function ckPicker(card) {
     }
     panel.append(row);
   }
-  if (accounts.length) { // which Claude account it runs under, from the next turn on
+  if (accounts.length) { // which Claude or agy account it runs under, from the next turn on
     const row = el("div", "ck-mrow ck-account"), seg = el("div", "ck-mopts"); // like the models: a name, what is left under it
     row.append(el("span", "ck-mfam", "Account"), seg);
-    const own = ckAllAccounts(card).find((a) => a.id === "") || { id: "" }, main = ckAccPc(card)?.claudeMain || "";
+    const own = ckAllAccounts(card).find((a) => a.id === "") || { id: "" }, main = ckAccPc(card)?.[`${card.pick.agent}Main`] || "";
     for (const a of accountOrder([own, ...accounts], main).filter((a) => !accountGone(a, main) || (card.pick.account || "") === a.id && card.pick.accountSet)) {
       const b = el("button", "ck-mopt ck-acc", `${a.id || "own"}${a.id === main ? " (main)" : ""}`), left = a.pc ? "" : accountLeft(a); b.type = "button";
       if (left) b.append(el("small", null, left)); // what is left of it, at a glance
       const kindLabel = a.kind === "token" ? (a.preview ? `long-lived token (${a.preview})` : "long-lived token")
         : a.kind === "apikey" ? (a.preview ? `API key (${a.preview})` : "API key")
         : a.kind === "login" ? "browser sign-in" : "";
-      const desc = a.pc ? "The pc's own Claude sign-in (its owner's)"
+      const desc = a.pc ? `The pc's own ${AGENT_NAME[card.pick.agent] || card.pick.agent} sign-in (its owner's)`
         : [a.id || "own", a.email, kindLabel, a.plan].filter(Boolean).join(" · ") || "not signed in";
       const timing = a.pc ? "" : accountTiming(a);
       b.title = [desc, timing].filter(Boolean).join(" — ");
@@ -1451,7 +1454,7 @@ async function ckStart(card, text) { // the draft's first message: make the chat
     const m = ckPc(machine);
     let failed = "";
     try {
-      await api("/ui/api/chat/send", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ machine, id: res.chat.id, text, model: p.id, effort: p.effort, ...(p.agent === "claude" ? { account: p.account || "" } : {}) }) });
+      await api("/ui/api/chat/send", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ machine, id: res.chat.id, text, model: p.id, effort: p.effort, ...(ACC_AGENTS.includes(p.agent) ? { account: p.account || "" } : {}) }) });
       store.set("kn_chat_pick", JSON.stringify({ agent: p.agent, id: p.id, effort: p.effort, machine, folder }));
     } catch (err) { failed = err.message; } // the chat exists now: go there with the text kept, never make another
     card.input.value = ""; ckDraftKeep(card); ckDrop(ckKey(CK_DRAFT)); ck.summaryAt = 0;
@@ -1533,9 +1536,10 @@ function ckPaint(card) {
   card.state.hidden = false;
   const before = Object.entries(m.used_by || {}); // agents this chat ran in before (continued elsewhere): each its own count
   card.tok.hidden = !m.used && !m.ctx && !before.length; // the conversation's tokens: its context now and all it used
-  // the Claude account it runs on and what is left of it (yours only: another person's account is never named here)
-  const acc = m.agent === "claude" ? (ckPc(m.machine)?.agents?.claude?.accounts || []).find((a) => a.id === (m.account || "") && a.mine !== false && !a.pc) : null;
-  const accText = acc && (acc.id || (ckPc(m.machine)?.agents?.claude?.accounts || []).length > 1) ? `${acc.id || "own"}${accountLeft(acc) ? `: ${accountLeft(acc)}` : ""}` : "";
+  // the Claude or agy account it runs on and what is left of it (yours only: another person's account is never named here)
+  const accs = ACC_AGENTS.includes(m.agent) ? ckPc(m.machine)?.agents?.[m.agent]?.accounts || [] : [];
+  const acc = accs.find((a) => a.id === (m.account || "") && a.mine !== false && !a.pc);
+  const accText = acc && (acc.id || accs.length > 1) ? `${acc.id || "own"}${accountLeft(acc) ? `: ${accountLeft(acc)}` : ""}` : "";
   card.tok.hidden = card.tok.hidden && !accText;
   setText(card.tok, [accText, m.ctx && `${ckNum(m.ctx)} context`, m.used && `${ckNum(m.used)} used${before.length ? ` (${AGENT_NAME[m.agent] || m.agent})` : ""}`,
     ...before.map(([a, n]) => `${ckNum(n)} (${AGENT_NAME[a] || a})`)].filter(Boolean).join(" · "));
@@ -1883,7 +1887,7 @@ function ckLine(card, e) {
     return line;
   }
   const line = el("div", `ck-line ${e.kind}`, e.text);
-  if (e.kind === "error" && /rate[ -]?limit|quota|exceeded|429/i.test(e.text || "") && (card.pick?.agent || card.meta?.agent) === "claude") {
+  if (e.kind === "error" && /rate[ -]?limit|quota|exceeded|429/i.test(e.text || "") && ACC_AGENTS.includes(card.pick?.agent || card.meta?.agent)) {
     const all = ckAllAccounts(card);
     const curr = card.pick?.account ?? card.meta?.account ?? "";
     const other = all.find((a) => (a.id || "") !== curr);
@@ -1891,9 +1895,10 @@ function ckLine(card, e) {
       const swBtn = el("button", "btn small quiet", `Switch to ${other.id || "own"}`);
       swBtn.type = "button";
       swBtn.style.marginLeft = "8px";
-      swBtn.title = `Switch this chat to the Claude account ${other.id || "own"}`;
+      const ag = card.pick?.agent || card.meta.agent;
+      swBtn.title = `Switch this chat to the ${AGENT_NAME[ag] || ag} account ${other.id || "own"}`;
       swBtn.onclick = () => {
-        card.pick = { ...(card.pick || {}), agent: "claude", account: other.id, accountSet: true, touched: true };
+        card.pick = { ...(card.pick || {}), agent: ag, account: other.id, accountSet: true, touched: true };
         ckPicker(card);
         card.input.focus();
         toast(`Switched to ${other.id || "own"}`);

@@ -1677,6 +1677,29 @@ def share_contract(tmp, ck, fr, raw, er, et):
     http("POST", "/machine/chats/events", {"chat": made["id"], "events": [], "done": True}, token=fr, headers=pc)
     http("POST", "/machine/report", crep, token=fr, headers=pc)
     assert main("") == 200 and rows(ck)[mid]["claudeMain"] == ""
+    # agy accounts: the same rules per person with actions of their own, a main of their own, Google's sign-in link only
+    aaccs = [{"id": "", "kind": "login"}, {"id": "home", "kind": "login", "by": "alice", "email": "a@example.org"},
+             {"id": "erin", "by": "erin", "login": "https://accounts.google.com/o/oauth2/auth?x=1"}, {"id": "bad", "by": "erin", "login": "https://evil.example/o"}]
+    arep = {**rep, "agents": {**rep["agents"], "agy": {"accounts": aaccs}}}
+    http("POST", "/machine/report", arep, token=fr, headers=pc)
+    theirs = {a["id"]: a for a in rows(er)[mid]["agents"]["agy"]["accounts"]}
+    assert list(theirs) == ["", "erin", "bad"] and theirs["erin"]["login"].startswith("https://accounts.google.com/") and "login" not in theirs["bad"], theirs
+    assert {a["id"]: a["mine"] for a in rows(ck)[mid]["agents"]["agy"]["accounts"]} == {"": True, "home": True, "erin": False, "bad": False}
+    assert act("agy_login", {"account": "home"}, er) == 403 and act("agy_login", {"account": ""}) == 400, "never someone else's, never the pc's own"
+    assert act("agy_code", {"account": "erin", "code": "a b"}, er) == 400 and act("agy_code", {"account": "erin", "code": "4/0Ab-x_y.z"}, er) == 200
+    assert act("agy_remove", {"account": "erin"}) == 200, "the pc owner takes any account off"
+    queued = json.loads(http("GET", "/machine/actions", token=fr, headers=pc)[1])["actions"]
+    assert [(a["action"], a["args"]["account"]) for a in queued] == [("agy_code", "erin"), ("agy_remove", "erin")], queued
+    for a in queued:
+        http("POST", "/machine/actions/result", {"id": a["id"], "ok": True}, token=fr, headers=pc)
+    amain = lambda acc, h=ck: ui("/ui/api/machines/claude-main", {"machine": mid, "account": acc, "agent": "agy"}, h)[0]
+    assert amain("home", er) == 400 and amain("erin", er) == 200 and rows(er)[mid]["agyMain"] == "erin" and rows(er)[mid]["claudeMain"] == ""
+    made = json.loads(ui("/ui/api/chats", {"machine": mid, "agent": "agy", "folder": "/home/x/garden"}, er)[2])["chat"]
+    assert made["account"] == "erin", made
+    assert ui("/ui/api/chat/send", {"machine": mid, "id": made["id"], "text": "hi", "account": "home"}, er)[0] == 400
+    assert ui("/ui/api/chat/send", {"machine": mid, "id": made["id"], "text": "hi"}, er)[0] == 200 and turn_acc() == [("erin", None)]
+    http("POST", "/machine/chats/events", {"chat": made["id"], "events": [], "done": True}, token=fr, headers=pc)
+    assert amain("", er) == 200
     http("POST", "/machine/report", rep, token=fr, headers=pc)
     # Files on a pc shared for use: only that project's folders, the request names the project for the companion, and
     # the owner's token answers it.

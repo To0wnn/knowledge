@@ -866,8 +866,11 @@ async def shell(browser, devices, secret: str) -> None:
     check(order == [["rick", "a", "", "b"], True, False, False, ""],
           f"Accounts: main first, signed-out last and without old usage; a signed-out own one is hidden unless main {order}")
     if any("work" in a for a in acc[0]):  # the seeded pc (ui_ci): own sign-in, a token account, one waiting for its code
-        check(acc[0][0].startswith("own") and any("long-lived token" in a for a in acc[0]) and acc[1] == ["https://claude.com/cai/oauth/authorize?code=true"],
+        check(acc[0][0].startswith("own") and any("long-lived token" in a for a in acc[0]) and acc[1][0] == "https://claude.com/cai/oauth/authorize?code=true",
               f"Machines: Claude accounts with the sign-in link of the one that waits {acc}")
+        gmail = next((a for a in acc[0] if a.startswith("gmail")), "")
+        check(acc[1][1:] == ["https://accounts.google.com/o/oauth2/auth?client_id=x"] and "Confirm" in gmail and "Remove" in gmail,
+              f"Machines: agy accounts with Google's sign-in link and a code to paste {gmail} {acc[1]}")
         work = next(a for a in acc[0] if a.startswith("work"))
         check("40%" in work and "Make main" in work and "$" not in work, f"Machines: an account shows its usage, and Make main {work}")
         api = next((a for a in acc[0] if a.startswith("cloud")), "")
