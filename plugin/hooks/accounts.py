@@ -255,7 +255,7 @@ def _drop(name: str):
             subprocess.run(["taskkill", "/F", "/T", "/PID", str(rec["p"].pid)], capture_output=True, timeout=30,
                            creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0))
         rec["p"].kill()
-    if "master" in rec:  # after the kill: on macOS close() of a pty waits for its reader's read(), which only ends then
+    if rec.get("master") is not None:  # after the kill: on macOS close() of a pty waits for its reader's read(), which only ends then
         try:
             rec["p"].wait(5)
         except subprocess.TimeoutExpired:
@@ -308,9 +308,6 @@ def login(name: str, wait: float = 30, by: str = "", setup: bool = False) -> str
     """Start a browser sign-in for account `name` (made when new; "" signs the pc's own in again); the URL to open.
     The code goes in with code(). When `setup` is True, it runs `claude setup-token` in a pty to create a 1-year
     long-lived token directly; when False (default), it runs standard `claude auth login`."""
-    if setup and os.name == "nt":  # setup-token needs a terminal; Python has no pty on Windows (piped, it prints nothing)
-        raise RuntimeError("a long-lived token cannot be made from here on Windows: run `claude setup-token` in a terminal"
-                           " (on any pc) and paste the token under Change sign-in…")
     d = where(name)
     new = bool(name) and not d.is_dir()
     if name:
@@ -319,24 +316,30 @@ def login(name: str, wait: float = 30, by: str = "", setup: bool = False) -> str
         _drop(name)
         e = run_env(name, d)
         cmd = command("setup-token") if setup else command("auth", "login", "--claudeai")
-        if setup and os.name != "nt":
-            import pty
-            import fcntl
-            import struct
-            import termios
-            master, slave = pty.openpty()
-            # wide, so claude never wraps the 1-year token over two lines
-            fcntl.ioctl(slave, termios.TIOCSWINSZ, struct.pack("HHHH", 50, 500, 0, 0))
-            p = subprocess.Popen(cmd, stdin=slave, stdout=slave, stderr=slave,
-                                 env={**e, "BROWSER": NO_BROWSER}, close_fds=True)
-            os.close(slave)
-            rec = LOGINS[name] = {"p": p, "master": master, "url": "", "out": [], "raw": "", "at": time.time(), "by": by,
-                                  "setup": True}
+        if setup:  # setup-token needs a terminal: piped, it prints nothing and waits forever
+            if os.name == "nt":
+                import conpty
+                p = conpty.Spawn(cmd, {**e, "BROWSER": NO_BROWSER})  # 500 columns, like the pty below
+                master, read, send = None, p.read, p.write
+            else:
+                import pty
+                import fcntl
+                import struct
+                import termios
+                master, slave = pty.openpty()
+                # wide, so claude never wraps the 1-year token over two lines
+                fcntl.ioctl(slave, termios.TIOCSWINSZ, struct.pack("HHHH", 50, 500, 0, 0))
+                p = subprocess.Popen(cmd, stdin=slave, stdout=slave, stderr=slave,
+                                     env={**e, "BROWSER": NO_BROWSER}, close_fds=True)
+                os.close(slave)
+                read, send = (lambda: os.read(master, 4096)), (lambda b: os.write(master, b))
+            rec = LOGINS[name] = {"p": p, "master": master, "send": send, "url": "", "out": [], "raw": "", "at": time.time(),
+                                  "by": by, "setup": True}
 
             def read_pty():
                 while True:
                     try:
-                        chunk = os.read(master, 4096)
+                        chunk = read()
                         if not chunk:
                             break
                         text = chunk.decode("utf-8", errors="replace")
@@ -422,13 +425,13 @@ def code(name: str, text: str, wait: float = 90, by: str = "") -> str:
     with LOCK:
         by = rec.get("by", "")
         setup = rec.get("setup", False)
-        if "master" in rec:
+        if "send" in rec:
             try:
                 # claude's TUI reads raw keys: Enter is \r (\n does nothing), and a long code with \r in one write is
                 # taken as a paste that swallows the Enter, so the Enter goes on its own
-                os.write(rec["master"], clean.encode("utf-8"))
+                rec["send"](clean.encode("utf-8"))
                 time.sleep(0.5)
-                os.write(rec["master"], b"\r")
+                rec["send"](b"\r")
             except OSError as e:
                 raise RuntimeError(f"the sign-in ended: {e}") from e
         else:
@@ -780,26 +783,19 @@ def self_test():
         remove("callback")
         assert logout_own() == "own: signed out" and not (MAIN / ".credentials.json").exists()
         # setup-token creates a 1-year token directly via the browser flow
-        if os.name == "nt":  # no pty: refused at once, with the way that works
-            try:
-                login("tok1", setup=True)
-                raise AssertionError("setup-token on Windows must be refused")
-            except RuntimeError as e:
-                assert "claude setup-token" in str(e) and "tok1" not in names(), e
-        else:
-            login("tok1", setup=True)
-            t0 = time.time()
-            try:
-                code("tok1", "bad")
-                raise AssertionError("a refused code must fail")
-            except RuntimeError as e:
-                assert "OAuth error: That code was not accepted" in str(e) and time.time() - t0 < 10, (str(e), time.time() - t0)
-            u2 = login("tok1", setup=True)
-            assert u2 == url and {a["id"]: a for a in listing()}["tok1"]["login"] == url
-            assert code("tok1", "good#code").startswith("tok1: long-lived token saved")
-            assert {a["id"]: a for a in listing()}["tok1"]["kind"] == "token"
-            assert (kept("tok1") / TOKEN).read_text(encoding="utf-8").endswith("abcdef0123456789"), "the whole token, though printed in two parts"
-            remove("tok1")
+        login("tok1", setup=True)
+        t0 = time.time()
+        try:
+            code("tok1", "bad")
+            raise AssertionError("a refused code must fail")
+        except RuntimeError as e:
+            assert "OAuth error: That code was not accepted" in str(e) and time.time() - t0 < 10, (str(e), time.time() - t0)
+        u2 = login("tok1", setup=True)
+        assert u2 == url and {a["id"]: a for a in listing()}["tok1"]["login"] == url
+        assert code("tok1", "good#code").startswith("tok1: long-lived token saved")
+        assert {a["id"]: a for a in listing()}["tok1"]["kind"] == "token"
+        assert (kept("tok1") / TOKEN).read_text(encoding="utf-8").endswith("abcdef0123456789"), "the whole token, though printed in two parts"
+        remove("tok1")
         login("tok3")
         p3 = LOGINS["tok3"]["p"]
         assert cancel("tok3") == "tok3: sign-in cancelled" and "login" not in {a["id"]: a for a in listing()}["tok3"], \
