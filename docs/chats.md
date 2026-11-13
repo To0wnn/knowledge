@@ -5,7 +5,9 @@ from a phone. The pc side runs in the companion ([companion.md](companion.md)).
 
 ## Agents
 
-- **A pc shared per project** (Machines, a pc's **More › Share…**, `GET/POST /ui/api/machine/share`): the pc's owner,
+- **A pc shared per project** (Machines, a pc's **More › Share…**, or the admin page's People tab under each person's
+  access to a project, which lists every pc with that project linked and its share for them: a select on your own pcs, text on
+  someone else's; `GET/POST /ui/api/machine/share`, `pcs` in `GET /ui/api/admin`): the pc's owner,
   and only they, shares it per project linked there with one other member of that project at a time
   (`admin/machine_shares.json`: `{machine: {by, projects: {project: {person: view | use}}}}`). **View** lists that pc's
   chats of that project in the other person's Agents view, read only (`rights: "view"`, the box is disabled, opening it

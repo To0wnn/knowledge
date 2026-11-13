@@ -5659,7 +5659,19 @@ async def ui_admin_state(request: Request, _):
         "models": model_overview(await asyncio.to_thread(machine_rows), data, read_json(MODEL_CHOICE, {})) if (data := await asyncio.to_thread(advice_data)) else None,
         "system": await asyncio.to_thread(system_state),
         "external": read_json(EXTERNAL_FILE, {}),
+        "pcs": await asyncio.to_thread(pc_shares_overview),
     })
+
+
+def pc_shares_overview() -> list[dict]:
+    """People: per pc with linked project folders, what its owner shared there, next to project access (one row per
+    person): access alone does not show someone a pc's chats. `mine`: this admin may change it (only the pc's owner shares)."""
+    shares, tokens, me = read_json(SHARES_FILE, {}), read_json(TOKENS_FILE, {}), device.get().get("user", "")
+    owner = lambda r: next((tokens[n]["owner"] for n in r["tokens"] if (tokens.get(n) or {}).get("owner")), me if r["mine"] else "")
+    return [{"id": r["id"], "label": r["label"], "mine": r["mine"], "owner": owner(r), "projects": linked,
+             "shares": {p: g for p, g in ((shares.get(r["id"]) or {}).get("projects") or {}).items() if p in linked}}
+            for r in machine_rows() if not r.get("old")
+            and (linked := sorted({f.get("project") for f in ((r.get("companion") or {}).get("folders") or {}).get("linked", []) if f.get("project") in PROJECTS}))]
 
 
 @server.custom_route("/ui/api/admin/impersonate", methods=["POST"])

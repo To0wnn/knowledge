@@ -184,12 +184,44 @@ function renderTokens() {
   }));
 }
 
+// Under a person's access to a project: what each pc with that project linked shares with them. Access alone shows no
+// chats: those run on a pc, and only its owner shares it (the same record as Machines › Share…). Your own pcs: a select.
+const SHARE_WORDS = { "": "Off", view: "View chats", use: "View and use", yolo: "Use with YOLO" };
+function pcShares(td, user, project, member) {
+  td.querySelector(".pc-shares")?.remove();
+  const pcs = (state.pcs || []).filter((m) => m.projects.includes(project) && m.owner !== user);
+  if (!member || !pcs.length) return;
+  const box = el("div", "pc-shares");
+  for (const m of pcs) {
+    let mode = ((m.shares[project] || {})[user]) || "";
+    const line = el("div", "muted", `${m.label}: `);
+    if (!m.mine) { line.append(SHARE_WORDS[mode] || mode); line.title = `Only the owner of ${m.label} shares it (Machines › Share…)`; box.append(line); continue; }
+    const sel = el("select", "small");
+    sel.setAttribute("aria-label", `${user}: ${m.label} for ${project}`);
+    sel.title = `What ${user} sees and may do of your chats on ${m.label} in ${project}`;
+    for (const [v, t] of Object.entries(SHARE_WORDS)) sel.append(new Option(t, v));
+    sel.value = mode;
+    sel.onchange = async () => {
+      if (sel.value === "use" && !confirm(`Let ${user} run agents on ${m.label} in ${project}?\n\nTheir agents run as you on this pc (files, network, your agent subscription). Every tool call asks them first: give this only to someone you would give a shell.`)) { sel.value = mode; return; }
+      if (sel.value === "yolo" && prompt(`${user}'s chats on ${m.label} (${project}) then run with this pc's YOLO switch: no tool call asked, as you on this pc, on your agent subscription. Type YOLO to allow it.`) !== "YOLO") { sel.value = mode; return; }
+      showError(null);
+      try {
+        await api("/ui/api/machine/share", { machine: m.id, project, user, mode: sel.value });
+        mode = (m.shares[project] ||= {})[user] = sel.value;
+        toast(`Saved: ${user} ${SHARE_WORDS[sel.value]} on ${m.label} (${project})`);
+      } catch (e) { sel.value = mode; showError(e); }
+    };
+    line.append(sel); box.append(line);
+  }
+  td.append(box);
+}
+
 function renderUsers() {
   const projects = state.projects.map((p) => p.name);
   const head = el("tr"); head.append(el("th", "", "Person"), ...projects.map((p) => el("th", "", p)), el("th", "", "Actions"));
   $("users-head").replaceChildren(head);
   const rows = state.admins.map((a) => {
-    const tr = el("tr"); tr.append(el("td", "mono", a), ...projects.map(() => el("td", "muted", "admin")), el("td", "muted", "server config"));
+    const tr = el("tr"); tr.append(el("td", "mono", a), ...projects.map((p) => { const td = el("td", "muted", "admin"); pcShares(td, a, p, true); return td; }), el("td", "muted", "server config"));
     return tr;
   });
   // People who signed in without access first: they are waiting for an answer.
@@ -206,7 +238,8 @@ function renderUsers() {
       for (const m of ["none", "read", "write"]) { const o = el("option", "", m); o.value = m; s.append(o); }
       s.value = (u.projects || {})[p] || "none";
       const td = el("td"); td.append(s); tr.append(td);
-      return [p, s];
+      pcShares(td, name, p, s.value !== "none");
+      return [p, s, td];
     });
     // Saved shortly after the last change, without rebuilding the table: arrow keys on a closed select fire a change
     // per step, and a rebuild would drop the focus. On an error the table reloads, so it shows what is stored.
@@ -218,6 +251,7 @@ function renderUsers() {
           try {
             await api("/ui/api/admin/user", { username: name, projects: Object.fromEntries(selects.map(([p, x]) => [p, x.value])) });
             tr.classList.toggle("pending", selects.every(([, x]) => x.value === "none"));
+            for (const [p, x, td] of selects) pcShares(td, name, p, x.value !== "none");
             toast(`Saved: access of ${name}`);
           } catch (e) { showError(e); load().catch(showError); }
         }, 700);

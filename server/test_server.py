@@ -1538,6 +1538,8 @@ def share_contract(tmp, ck, fr, raw, er, et):
     assert {c["project"] for c in cands} >= {"garden"} and {"user": "erin", "mode": ""} in next(c for c in cands if c["project"] == "garden")["members"], cands
     assert share("view")[0] == 200
     assert rows(ck)[mid]["shares"] == {"garden": {"erin": "view"}}
+    pcs = {p["id"]: p for p in json.loads(raw("GET", "/ui/api/admin", headers=ck)[2])["pcs"]}  # People shows it next to access
+    assert pcs[mid] == {"id": mid, "label": "attic", "mine": True, "owner": "alice", "projects": ["garden", "trade"], "shares": {"garden": {"erin": "view"}}}, pcs[mid]
     r = rows(er)[mid]  # trimmed: none of the owner's tokens, sessions, workers or other folders
     assert r["shared"] == {"garden": "view"} and r["tokens"] == [] and r["agents"] == {} and r["companion"]["folders"]["linked"] == [] and not r["own"], r
     seen = {c["id"]: c["rights"] for c in json.loads(ui("/ui/api/chats", h=er)[2])["chats"] if c["machine"] == mid}
