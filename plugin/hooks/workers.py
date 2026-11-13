@@ -99,6 +99,11 @@ def worktree(folder: str, tid: str, project: str = "", prefix: str = "task", mak
         return {"cwd": str(wt / Path(os.path.relpath(Path(folder).resolve(), repo.resolve()))), "worktree": str(wt)} if (wt / ".git").exists() else {}
     on = git(repo, "symbolic-ref", "--short", "-q", "HEAD").stdout.strip()  # what a review merges into (a new worktree starts from it)
     conf = config_hash(repo)  # before the worker runs: a merge refuses a config changed since
+    if (wt / ".git").exists() and git(wt, "rev-parse", "--git-dir").returncode:  # a removal that half failed (a locked file)
+        try:
+            wt.rename(wt.with_name(f"{wt.name}.stale-{int(time.time())}"))  # its files stay; a fresh worktree takes the path
+        except OSError:
+            pass
     if not (wt / ".git").exists():
         if wt.exists():
             shutil.rmtree(wt, ignore_errors=True)
@@ -462,7 +467,7 @@ def merged(w: dict) -> bool:
         return False
     tip = git(w["repo"], "rev-parse", "-q", "--verify", f"refs/heads/{w['branch']}").stdout.strip()
     if not tip or (tip == w.get("base") and (w.get("status") != "finished" or not Path(w.get("worktree") or "").is_dir()
-                                             or git(w["worktree"], "status", "--porcelain").stdout.strip())):
+                                             or (st := git(w["worktree"], "status", "--porcelain")).returncode or st.stdout.strip())):
         return False
     # its upstream counts too: a deploy pushes to origin/main and leaves the local main behind
     return any(holds(w["repo"], tip, ref) for b in dict.fromkeys(("main", "master", w.get("base_branch")))
@@ -540,13 +545,23 @@ def merge(w: dict) -> str:
 
 def remove(w: dict) -> str:
     """The worktree and branch of a merged worker (merged() said so). A worktree with uncommitted or untracked files
-    stays: --force (needed for a locked one) would delete them. -D: a squash-landed branch is not an ancestor."""
-    if Path(w["worktree"]).is_dir() and git(w["worktree"], "status", "--porcelain").stdout.strip():
-        return "worktree kept: it has uncommitted files"
+    stays: --force (needed for a locked one) would delete them; so does one whose git status fails (a damaged index
+    prints nothing) and one whose HEAD is not the branch's tip (commits on a detached HEAD have no other ref).
+    -D: a squash-landed branch is not an ancestor; only the tip merged() saw, never a commit made since.
+    shortcut: files git ignores go with the worktree; keep them (status --ignored minus .worktreeinclude) when that ever costs work."""
+    tip = git(w["repo"], "rev-parse", "-q", "--verify", f"refs/heads/{w['branch']}").stdout.strip()
+    if Path(w["worktree"]).is_dir():
+        st = git(w["worktree"], "status", "--porcelain")
+        if st.returncode:
+            return f"worktree kept: git status failed there: {st.stderr.strip()[:160]}"
+        if st.stdout.strip():
+            return "worktree kept: it has uncommitted files"
+        if git(w["worktree"], "rev-parse", "HEAD").stdout.strip() != tip:
+            return "worktree kept: its HEAD is not on its branch (commits on a detached HEAD?)"
     r = git(w["repo"], "worktree", "remove", "--force", w["worktree"])
     if r.returncode:
         return f"worktree kept: {(r.stderr or r.stdout).strip()[:160]}"
-    git(w["repo"], "branch", "-D", w["branch"])
+    git(w["repo"], "update-ref", "-d", f"refs/heads/{w['branch']}", tip)
     return "worktree and branch removed"
 
 
@@ -738,6 +753,14 @@ def self_test():
         assert (Path(w["cwd"]) / project_marker.MARKER).read_text().strip() == "garden"
         assert not git(w["cwd"], "status", "--porcelain").stdout.strip(), "the marker stays out of commits"
         assert worktree(str(sub), "KN-1-cont")["worktree"] == w["worktree"], "a hand-over goes on in the same worktree"
+        w9 = worktree(str(sub), "KN-9")  # a removal that half failed: git's admin folder gone, the folder left
+        (Path(w9["worktree"]) / "left.txt").write_text("x\n")
+        shutil.rmtree(Path(git(w9["worktree"], "rev-parse", "--git-dir").stdout.strip()))
+        assert worktree(str(sub), "KN-9")["worktree"] == w9["worktree"] and git(w9["worktree"], "rev-parse", "--git-dir").returncode == 0
+        stale = [x for x in Path(w9["worktree"]).parent.iterdir() if x.name.startswith(Path(w9["worktree"]).name + ".stale-")]
+        assert len(stale) == 1 and (stale[0] / "left.txt").exists(), "set aside with its files, a fresh worktree in its place"
+        shutil.rmtree(stale[0])
+        remove({**w9, "status": "finished"})
         c = argv("codex", "codex", "x", False, w)
         dirs = [Path(c[i + 1]).resolve() for i, a in enumerate(c) if a == "--add-dir"]
         dot = (repo / ".git").resolve()
@@ -780,6 +803,19 @@ def self_test():
         (Path(w["cwd"]) / "late.txt").write_text("x\n")
         assert remove(w) == "worktree kept: it has uncommitted files" and Path(w["worktree"]).is_dir(), "uncommitted work is never removed"
         (Path(w["cwd"]) / "late.txt").unlink()
+        git(w["worktree"], "checkout", "-q", "--detach", check=True)  # commits on a detached HEAD: only HEAD holds them
+        (Path(w["cwd"]) / "d.txt").write_text("d\n")
+        git(w["cwd"], "add", "d.txt", check=True)
+        git(w["cwd"], "commit", "-qm", "detached", check=True)
+        assert remove(w).startswith("worktree kept: its HEAD is not on its branch"), "a detached commit is never dropped"
+        git(w["worktree"], "checkout", "-q", w["branch"], check=True)
+        idx = Path(git(w["worktree"], "rev-parse", "--git-path", "index").stdout.strip())
+        idx = idx if idx.is_absolute() else Path(w["worktree"]) / idx
+        good = idx.read_bytes()
+        idx.write_bytes(good[:20])  # a damaged index: git status fails and prints nothing on stdout
+        assert remove(w).startswith("worktree kept: git status failed"), "a failing status is not a clean worktree"
+        assert not merged({**w, "status": "finished", "base": git(repo, "rev-parse", f"refs/heads/{w['branch']}").stdout.strip()})
+        idx.write_bytes(good)
         git(repo, "branch", "-q", "--unset-upstream", "main", check=True)
         git(repo, "checkout", "-q", "main", check=True)
         git(repo, "branch", "-q", "-D", "squash", check=True)

@@ -1438,7 +1438,13 @@ def check_workers(ws: dict, tok: str, now: float, lim: dict):
                 except Exception as e:
                     log("error", f"Could not stop the worker for {w['id']}", f"{e}"[:200])
         elif w["status"] != "merged" and w.get("worktree") and not shared_running(ws, w) and bounded(w["worktree"], lambda w=w: workers.merged(w), default=False):
-            w["status"], w["result"] = "merged", workers.remove(w)
+            result = workers.remove(w)
+            if not result.endswith("removed"):  # kept (uncommitted files, a lock): said once, tried again next round
+                if w.get("result") != result:
+                    w["result"] = result
+                    log("worker", f"{w['id']}: its work is landed, but its worktree stays", result)
+                continue
+            w["status"], w["result"] = "merged", result
             for o in ws.values():  # the sessions before or after it in that worktree (a hand-over) share its branch
                 if o is not w and o.get("worktree") == w["worktree"] and o["status"] != "running":
                     o["status"], o["result"] = "merged", w["result"]
