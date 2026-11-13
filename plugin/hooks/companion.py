@@ -1088,13 +1088,19 @@ def usage_info(agent: str, ws: dict, now: float) -> list:
     tell it while a session runs, so the last reading is kept until its window resets: usage does not go down before
     that."""
     f = STATE / f"usage-{agent}.json"
+    acct = claude_main() if agent == "claude" else ""  # Claude's reading belongs to the main account it was taken under
     got = usage_live(agent, ws, now)
     if got:
         try:
-            write_json(f, {"windows": got, "at": now})
+            write_json(f, {"windows": got, "at": now, "account": acct})
         except OSError:
             pass
         return got
+    try:  # after Make main, the old main's reading is not the new one's
+        if json.loads(f.read_text(encoding="utf-8")).get("account", "") != acct:
+            return []
+    except (OSError, ValueError, AttributeError):
+        pass
     return kept_agy(f, now) if agent == "agy" else kept_windows(f, now)  # shortcut: another pc may have used more since
 
 
@@ -3396,7 +3402,14 @@ def main(argv: list):
         assert usage_info("agy", {}, 1000) == live["v"]
         live["v"] = []
         assert usage_info("agy", {}, 1500) == [(42.0, "Gemini 7d", 2000.0), (0.0, "Gemini 5h", None)]
-        globals()["usage_live"] = real_live
+        real_main, globals()["claude_main"] = claude_main, lambda: ""  # Claude's kept reading follows the main account
+        live["v"] = [(61.0, "7d", 2000.0)]
+        assert usage_info("claude", {}, 1000) == live["v"]
+        live["v"] = []
+        assert usage_info("claude", {}, 1100) == [(61.0, "7d", 2000.0)]
+        globals()["claude_main"] = lambda: "other"
+        assert usage_info("claude", {}, 1100) == [], "a new main account must not show the old one's usage"
+        globals()["usage_live"], globals()["claude_main"] = real_live, real_main
         with tempfile.TemporaryDirectory() as g:  # the companion's own checkout follows main, never by a reset
             run = lambda *a, cwd=g: subprocess.run(["git", *a], cwd=cwd, capture_output=True, text=True, check=True)
             env_git = ["-c", "user.name=t", "-c", "user.email=t@t", "-c", "commit.gpgsign=false"]
