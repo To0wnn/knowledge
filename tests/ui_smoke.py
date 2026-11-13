@@ -871,6 +871,9 @@ async def shell(browser, devices, secret: str) -> None:
         gmail = next((a for a in acc[0] if a.startswith("gmail")), "")
         check(acc[1][1:] == ["https://accounts.google.com/o/oauth2/auth?client_id=x"] and "Confirm" in gmail and "Remove" in gmail,
               f"Machines: agy accounts with Google's sign-in link and a code to paste {gmail} {acc[1]}")
+        aikey, gwork = (next((a for a in acc[0] if a.startswith(n)), "") for n in ("aikey", "gwork"))
+        check("Gemini API key (AIzaSyAB…kkkk)" in aikey and "Change sign-in" in aikey and "g@example.org" in gwork and "30%" in gwork,
+              f"Machines: an agy API key account, and a Google one with its usage {aikey} {gwork}")
         work = next(a for a in acc[0] if a.startswith("work"))
         check("40%" in work and "Make main" in work and "$" not in work, f"Machines: an account shows its usage, and Make main {work}")
         api = next((a for a in acc[0] if a.startswith("cloud")), "")

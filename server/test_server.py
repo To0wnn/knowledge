@@ -1687,13 +1687,19 @@ def share_contract(tmp, ck, fr, raw, er, et):
     assert {a["id"]: a["mine"] for a in rows(ck)[mid]["agents"]["agy"]["accounts"]} == {"": True, "home": True, "erin": False, "bad": False}
     assert act("agy_login", {"account": "home"}, er) == 403 and act("agy_login", {"account": ""}) == 400, "never someone else's, never the pc's own"
     assert act("agy_code", {"account": "erin", "code": "a b"}, er) == 400 and act("agy_code", {"account": "erin", "code": "4/0Ab-x_y.z"}, er) == 200
+    assert act("agy_key", {"account": "erin", "key": "sk-ant-api03-" + "x" * 40}, er) == 400 and act("agy_key", {"account": "home", "key": "AIza" + "k" * 35}, er) == 403
+    assert act("agy_key", {"account": "erin", "key": "AIza" + "k" * 35}, er) == 200
     assert act("agy_remove", {"account": "erin"}) == 200, "the pc owner takes any account off"
     queued = json.loads(http("GET", "/machine/actions", token=fr, headers=pc)[1])["actions"]
-    assert [(a["action"], a["args"]["account"]) for a in queued] == [("agy_code", "erin"), ("agy_remove", "erin")], queued
+    assert [(a["action"], a["args"]["account"]) for a in queued] == [("agy_code", "erin"), ("agy_key", "erin"), ("agy_remove", "erin")], queued
+    assert "AIza" not in json.dumps(rows(er)[mid]["actions"]), "the key is never on the page"
     for a in queued:
         http("POST", "/machine/actions/result", {"id": a["id"], "ok": True}, token=fr, headers=pc)
     amain = lambda acc, h=ck: ui("/ui/api/machines/claude-main", {"machine": mid, "account": acc, "agent": "agy"}, h)[0]
     assert amain("home", er) == 400 and amain("erin", er) == 200 and rows(er)[mid]["agyMain"] == "erin" and rows(er)[mid]["claudeMain"] == ""
+    assert amain("home") == 200 and json.loads(http("POST", "/machine/report", arep, token=fr, headers=pc)[1])["agy_main"] == "home", \
+        "the owner's agy main goes to the pc for its workers"
+    assert amain("") == 200 and json.loads(http("POST", "/machine/report", arep, token=fr, headers=pc)[1])["agy_main"] == ""
     made = json.loads(ui("/ui/api/chats", {"machine": mid, "agent": "agy", "folder": "/home/x/garden"}, er)[2])["chat"]
     assert made["account"] == "erin", made
     assert ui("/ui/api/chat/send", {"machine": mid, "id": made["id"], "text": "hi", "account": "home"}, er)[0] == 400

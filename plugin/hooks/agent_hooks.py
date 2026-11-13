@@ -430,6 +430,8 @@ def register_agy():
     address, csrf = os.environ.get("ANTIGRAVITY_LS_ADDRESS", ""), os.environ.get("ANTIGRAVITY_CSRF_TOKEN", "")
     if not address or not csrf:
         sys.exit("knowledge: not run by agy (no ANTIGRAVITY_LS_ADDRESS), nothing registered")
+    if "knowledge-agy-account-bus" in os.environ.get("DBUS_SESSION_BUS_ADDRESS", ""):  # = agy_accounts.DBUS_OFF
+        sys.exit("knowledge: an agy on an extra account (agy_accounts.py): its usage is read from its own sign-in, nothing registered")
     entry = {"address": address, "csrf": csrf, "cwd": os.getcwd(), "at": time.time()}
     try:
         agy_call(entry, "GetAllCascadeTrajectories", {})

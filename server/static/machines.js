@@ -680,7 +680,7 @@ function accountsCell(m, agent = "claude") {
   return box;
 }
 // agy accounts on a Linux pc (agy_accounts.py): extra Google accounts for chats, signed in on Google's page whose code
-// comes back here. The pc's own sign-in stays agy's own; workers keep running on it.
+// comes back here, or a Gemini API key. The pc's own sign-in stays agy's own; workers run under the pc owner's main one.
 function agyAccountsCell(m) {
   const ag = m.agents?.agy;
   if (!ag) return null;
@@ -688,14 +688,16 @@ function agyAccountsCell(m) {
   const box = el("div", "mx-accounts"), steer = !!m.online && !!m.companion && !m.old && (steersAgent(m, "agy") || !m.own && usesPc(m)), main = m.agyMain || "";
   for (const x of accountOrder(ag.accounts, main)) {
     const line = el("div", "mx-account"), mine = x.mine !== false;
-    line.append(el("b", null, x.id || "own"), " ", val(!x.id ? "this pc's own sign-in" : x.email || (x.kind ? "signed in" : "not signed in"), !x.id || x.kind ? "" : "mx-diff"));
-    if (mine && x.id === main) { const p = el("span", "pill", "main"); p.title = "Default account for your new agy chats on this pc"; line.append(p); }
+    const who = !x.id ? "this pc's own sign-in" : x.kind === "apikey" ? `Gemini API key${x.preview ? ` (${x.preview})` : ""}` : x.email || (x.kind ? "signed in" : "not signed in");
+    line.append(el("b", null, x.id || "own"), " ", val(who, !x.id || x.kind ? "" : "mx-diff"));
+    if (mine && x.id === main) { const p = el("span", "pill", "main"); p.title = "Default account for workers and your new agy chats on this pc"; line.append(p); }
     if (!mine) line.append(" ", val(`added by ${x.by || "?"}`, "muted"));
+    if (mine && accountSignedIn(x) && usageWindows(x).length) line.append(accountBars(x));
     if (x.error) line.append(el("p", "machine-error", x.error));
-    const acts = [], busy = pendingAction(m, "agy_login", (y) => y.account === x.id) || pendingAction(m, "agy_code", (y) => y.account === x.id);
+    const acts = [], busy = ["agy_login", "agy_code", "agy_key"].some((k) => pendingAction(m, k, (y) => y.account === x.id));
     if (steer && mine && x.id !== main) {
       const b = actionButton("Make main", () => accountMain(m, x.id, "agy"), "btn small quiet");
-      b.title = "Make default account for your new agy chats on this pc"; acts.push(b);
+      b.title = "Make default account for workers and your new agy chats on this pc"; acts.push(b);
     }
     if (steer && mine && x.id && x.login) {
       const a = el("a", "btn small primary", "Open sign-in"); a.href = x.login; a.target = "_blank"; a.rel = "noopener noreferrer";
@@ -709,7 +711,7 @@ function agyAccountsCell(m) {
       stop.setAttribute("aria-label", "Cancel sign-in");
       acts.push(a, inp, ok, stop);
     } else if (steer && mine && x.id) {
-      acts.push(machineButton(x.kind ? "Sign in again" : "Sign in", `Sign ${x.id} in with Google`, () => machineAction(m, "agy_login", { account: x.id }), busy, x.kind ? "btn small quiet" : "btn small"));
+      acts.push(machineButton(x.kind ? "Change sign-in…" : "Sign in…", `Sign ${x.id} in with Google or a Gemini API key`, () => agyAccountAdd(m, x.id), busy, x.kind ? "btn small quiet" : "btn small"));
     }
     if (x.removing) acts.push(el("span", "muted", "Removed once its chats end"));
     else if (steer && x.id && (mine || m.own)) acts.push(machineButton("Remove", `Remove ${x.id} from ${m.label}`, () => confirm(`Remove the agy account ${x.id} from ${m.label}? A chat running on it finishes first; after that, chats that use it go back to the pc's own sign-in.`) ? machineAction(m, "agy_remove", { account: x.id }) : null,
@@ -718,14 +720,36 @@ function agyAccountsCell(m) {
     box.append(line);
   }
   if (steer) {
-    const addRow = el("div", "mx-accounts-add"), name = el("input");
-    name.required = true; name.pattern = "[a-z0-9][a-z0-9\\-]{0,30}"; name.placeholder = "e.g. work"; name.title = "a-z, 0-9 and -";
-    addRow.append(machineButton("+ Add account…", "Another Google account for agy on this pc, for your chats to pick", () => accountForm(`Add an agy account on ${m.label}`,
-      ["Sign in with the Google account in your browser; its page then shows a code to paste here. Chats on this pc can then run under it (the model chip). Settings, plugins and skills stay the pc's own; workers keep the pc's own sign-in."],
-      [["Name", name]], "Add", () => machineAction(m, "agy_login", { account: name.value })), false, "btn small quiet"));
+    const addRow = el("div", "mx-accounts-add");
+    addRow.append(machineButton("+ Add account…", "Another Google account or Gemini API key for agy on this pc, for your chats to pick", () => agyAccountAdd(m), false, "btn small quiet"));
     box.append(addRow);
   }
   return box;
+}
+// [value, button, what it is, what to paste (none: Google's page), its form]
+const AGY_WAYS = [
+  ["login", "Google", "Sign in with the Google account in your browser; its page then shows a code to paste on the account's row. Uses that account's own quota.", "", ""],
+  ["apikey", "Gemini API key", "A key from Google AI Studio (aistudio.google.com/apikey). Billed per use (or the free tier), not a subscription.", "AIza…", "AIza[\\w\\-]{35}"]];
+function agyAccountAdd(m, account = null) { // null: a new account; a name: sign that one in another way
+  const name = el("input"), secret = el("input"), ways = el("div", "seg"), about = el("p", "muted");
+  name.required = true; name.pattern = "[a-z0-9][a-z0-9\\-]{0,30}"; name.placeholder = "e.g. work"; name.title = "a-z, 0-9 and -";
+  if (account !== null) { name.value = account; name.readOnly = true; }
+  secret.type = "password"; secret.autocomplete = "off";
+  ways.setAttribute("role", "group"); ways.setAttribute("aria-label", "How it signs in");
+  let way = AGY_WAYS[0];
+  const pick = (w) => {
+    way = w; about.textContent = `${w[2]} A key goes only to this pc; the server does not keep it.`;
+    for (const b of ways.children) b.setAttribute("aria-pressed", String(b.dataset.way === w[0]));
+    const lab = secret.closest("label"); if (lab) lab.hidden = !w[3];
+    secret.required = !!w[3]; secret.placeholder = w[3]; secret.pattern = w[4] || ".*"; secret.value = "";
+  };
+  for (const w of AGY_WAYS) { const b = el("button", null, w[1]); b.type = "button"; b.dataset.way = w[0]; b.onclick = () => pick(w); ways.append(b); }
+  const shown = accountForm(account ? `Sign ${account} in on ${m.label}` : `Add an agy account on ${m.label}`,
+    [...(account === null ? ["Chats on this pc can then run under it (the model chip). Settings, plugins and skills stay the pc's own; workers run under your main account."] : []), ways, about],
+    [...(account === null ? [["Name", name]] : []), ["Key", secret]], account === null ? "Add" : "Sign in",
+    () => (way[0] === "login" ? machineAction(m, "agy_login", { account: name.value }) : machineAction(m, "agy_key", { account: name.value, key: secret.value.trim() })));
+  pick(way);
+  return shown;
 }
 // A small form in a dialog (it is not redrawn with the list, so what is typed stays); done once closed or sent.
 function accountForm(title, intro, fields, go, send) {

@@ -381,7 +381,7 @@ WIN_FLAGS, BREAKAWAY = 0x08000000 | 0x00000200, 0x01000000  # CREATE_NO_WINDOW |
 
 def start(agent: str, task: dict, machine: str, where: dict, yolo: bool, nonce: str, account: str = "") -> dict:
     """Start the worker process; its record (what the companion keeps and the Machines list shows). account: the
-    extra Claude account it runs under (accounts.py), "" the pc's own sign-in."""
+    extra Claude or agy account it runs under (accounts.py, agy_accounts.py), "" the pc's own sign-in."""
     exe = shutil.which(agent)
     if not exe:
         raise RuntimeError(f"{agent} is not on PATH")
@@ -394,6 +394,9 @@ def start(agent: str, task: dict, machine: str, where: dict, yolo: bool, nonce: 
         import accounts  # here: accounts imports this module for its .cmd shim
         if extra := accounts.env(account):  # another account, or the pc's own on a token or key
             env = {**{k: v for k, v in env.items() if k not in accounts.AUTH_ENV}, **extra}
+    if agent == "agy" and account:  # an extra agy account: its own folder through a home of links, never the keyring
+        import agy_accounts
+        env = {**env, **agy_accounts.worker_env(account)}
     env = env if yolo else git_safe_env(env)
     ckpt = checkpoint(where["cwd"], task["id"]) if yolo and where.get("branch") else ""
     cmd, note = argv(agent, exe, prompt(task, agent, machine, where, yolo), yolo, where), ""

@@ -6804,7 +6804,7 @@ def action_args(action: str, args: dict) -> dict:
                 raise ValueError("paste an API key from the Anthropic Console (sk-ant-api03-...)")
             out["key"] = str(args["key"]).strip()
         return out
-    if action in ("agy_login", "agy_cancel", "agy_code", "agy_remove"):  # extra agy accounts (agy_accounts.py; the pc's own signs in in agy)
+    if action in ("agy_login", "agy_cancel", "agy_code", "agy_key", "agy_remove"):  # extra agy accounts (agy_accounts.py; the pc's own signs in in agy)
         if not CLAUDE_ACCOUNT.fullmatch(str(args.get("account", ""))):
             raise ValueError("account must be a name of a-z, 0-9 and -, at most 31 characters")
         out = {"account": str(args["account"])}
@@ -6812,6 +6812,10 @@ def action_args(action: str, args: dict) -> dict:
             if not re.fullmatch(r"[\w/#.~:?&=%+-]{8,2048}", str(args.get("code", "")).strip()):
                 raise ValueError("paste the whole code, or the address of the page you landed on")
             out["code"] = str(args["code"]).strip()
+        if action == "agy_key":  # a Gemini API key (AI Studio): billed per use, not the Google subscription
+            if not re.fullmatch(r"AIza[\w-]{35}", str(args.get("key", "")).strip()):
+                raise ValueError("paste a Gemini API key from aistudio.google.com/apikey (AIza...)")
+            out["key"] = str(args["key"]).strip()
         return out
     if action in ("install_tool", "remove_tool", "tool_auto"):  # an id only: the steps ship with the pc's own plugin (plugin/tools)
         if not re.fullmatch(r"[a-z0-9][a-z0-9-]{0,39}", str(args.get("tool", ""))):
@@ -9692,7 +9696,9 @@ async def machine_report(request: Request):
     # (shortcut: an admins' own device shared by several admins takes the first of them by name; one admin per pc in practice)
     main = next((claude_main_of(dev["machine"], u, claude_accounts_for(m, u, True)) for u in sorted(read_json(CLAUDE_MAIN_FILE, {}).get(dev.get("machine", "")) or {})
                  if own_token(cfg, {"user": u, "admin": u in ADMINS}, steer=False)), "")
-    return JSONResponse({"ok": True, "closed_chats": closed, "newest": (await asyncio.to_thread(plugin_latest) or ("",))[0], "claude_main": main,
+    agy = next((claude_main_of(dev["machine"], u, claude_accounts_for(m, u, True, "agy"), "agy") for u in sorted(read_json(MAIN_FILES["agy"], {}).get(dev.get("machine", "")) or {})
+                if own_token(cfg, {"user": u, "admin": u in ADMINS}, steer=False)), "")
+    return JSONResponse({"ok": True, "closed_chats": closed, "newest": (await asyncio.to_thread(plugin_latest) or ("",))[0], "claude_main": main, "agy_main": agy,
                          **({"github_token": gh} if gh else {}), **({"aliases": aliases} if aliases else {})})
 
 
