@@ -1331,6 +1331,13 @@ function ckPicker(card) {
     panel.append(row);
   }
   menu.append(sum, panel);
+  // fixed to the viewport: a small grid card (overflow hidden) would clip the panel
+  menu.addEventListener("toggle", () => {
+    if (!menu.open) return;
+    const r = sum.getBoundingClientRect(), w = Math.min(460, innerWidth - 16);
+    Object.assign(panel.style, { position: "fixed", top: "auto", right: "auto", width: `${w}px`, bottom: `${innerHeight - r.top + 8}px`,
+      left: `${Math.max(8, Math.min(r.left, innerWidth - w - 8))}px`, maxHeight: `${Math.max(160, r.top - 16)}px` });
+  });
   card.picks.replaceChildren(menu, ...(draft ? [ckDraftFolder(card)] : []));
 }
 // Esc closes the model panel and the Snooze menu (a click outside: nav.js, for every menu); a click or Esc drops the

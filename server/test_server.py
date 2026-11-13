@@ -3940,9 +3940,8 @@ def main():
         (proj / ".knowledge-project").write_text("garden\n")
         (proj / "README.md").write_text("# Copilot v2\n")
         (proj / "notes" / "taxi.md").write_text("taxi speed\n")
-        # its own KNOWLEDGE_HOME: the pc's real one may mark a project as not synced (nosync-projects.json)
         genv = {**os.environ, "CLAUDE_PLUGIN_OPTION_URL": BASE, "CLAUDE_PLUGIN_OPTION_TOKEN": fr, "CLAUDE_PROJECT_DIR": str(proj / "notes"),
-                "KNOWLEDGE_HOME": str(tmp / "ghome")}
+                "HOME": str(tmp / "agyhome"), "USERPROFILE": str(tmp / "agyhome")}  # never this pc's own nosync list
         sync = str(Path(__file__).parents[1] / "plugin/hooks/docs-sync.py")
         out = subprocess.run([sys.executable, sync], input=json.dumps({"hook_event_name": "SessionStart"}), text=True,
                              env=genv, capture_output=True, check=True).stdout
