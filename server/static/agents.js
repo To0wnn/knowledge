@@ -12,7 +12,16 @@ const ckKey = (c) => `${c.machine}/${c.id}`;
 const ckBusy = (s) => s === "running" || s === "queued";
 const FORCE_BUSY = "This chat is working: force archive stops its turn, drops its queued messages and skips the wrap-up. Go on?";
 const ckShort = (path) => (path || "").split(/[\\/]/).filter(Boolean).pop() || path;
-const ckScope = (x) => (agentProject ? x.project === agentProject : picked(x.project)); // the header's project filter
+// the header's project filter, and Only mine (ckScopeSwitch): then no chat of someone else either
+const ckInProject = (x) => (agentProject ? x.project === agentProject : picked(x.project));
+const ckYours = (x) => !(ckMineOnly() && ckTheirs(x));
+const ckScope = (x) => ckInProject(x) && ckYours(x);
+const ckMineOnly = () => ck.scope?.scope === "mine" && ck.scope.names.length > 0;
+// someone else's chat (or its row on the board): started by another person; a chat with no starter is yours unless you may only view it
+function ckTheirs(x) {
+  const c = x.kind === "chat" || x.kind === "ask" ? ck.chats.find((y) => y.machine === x.machine && y.id === (x.kind === "ask" ? x.chat : x.id)) : x.kind ? null : x;
+  return !!c && (c.by ? c.by !== me.user : c.rights === "view");
+}
 
 // Polling of the pcs, chats and board runs while an Agents view shows; the router turns it on and off.
 function ckRun(on) { clearTimeout(ck.timer); if (on) { ck.summaryAt = 0; ckTick(); } }
@@ -171,7 +180,7 @@ function ckList() {
   if (!ck.ready) { box.replaceChildren(ck.error ? errorState(`Chats did not load: ${ck.error}`, () => { ck.error = ""; ckList(); ckRun(true); }) : loadingState()); return; }
   box.replaceChildren();
   if (!pcs && !items.length) box.append(ck.start ||= ckGetStarted()); // kept: a refresh would reset Copy and a selection
-  const elsewhere = (ck.board || []).filter((i) => i.col === "needs" && !ckScope(i)).length; // a project filter never hides what needs you without saying so
+  const elsewhere = (ck.board || []).filter((i) => i.col === "needs" && !ckInProject(i) && ckYours(i)).length; // a project filter never hides what needs you without saying so
   if (elsewhere) {
     const b = el("button", "btn small ck-elsewhere", `${elsewhere} more need${elsewhere > 1 ? "" : "s"} you in other projects: show all`);
     b.type = "button"; b.onclick = () => switchProject(ALL); box.append(b); // the one picker: the sidebar shows All too
@@ -571,20 +580,21 @@ function ckItem(i) {
 // Needs you: only your own task lines and results, or everyone's in your projects (a shared project has the others'
 // too). "Only mine" needs the names task lines give you: asked once, then saved in Settings (task_names).
 function ckScopeSwitch() {
-  const s = ck.scope || { scope: "all", names: [], others: 0 }, mine = s.scope === "mine" && s.names.length > 0;
-  const box = el("span", "seg ck-scope"); box.setAttribute("role", "group"); box.setAttribute("aria-label", "Whose tasks and results");
+  const s = ck.scope || { scope: "all", names: [], others: 0 }, mine = ckMineOnly();
+  const box = el("span", "seg ck-scope"); box.setAttribute("role", "group"); box.setAttribute("aria-label", "Whose chats, tasks and results");
   const pick = (text, on, title, fn) => { const b = el("button", null, text); b.type = "button"; b.title = title; b.setAttribute("aria-pressed", String(on)); b.onclick = (e) => { e.stopPropagation(); if (!on) fn(); }; box.append(b); };
   const save = async (body) => {
     try { me.prefs = (await api("/ui/api/me/prefs", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) })).prefs; }
     catch (e) { return toast(e.message); }
     ck.summaryAt = 0; ckTick();
   };
-  pick("Only mine", mine, s.names.length ? `Only the task lines and results for ${s.names.join(", ")} (Settings: My names in task lines)` : "Only your own task lines and results: asks once for the names task lines give you", () => {
+  pick("Only mine", mine, s.names.length ? `Only your own chats, and the task lines and results for ${s.names.join(", ")} (Settings: My names in task lines)` : "Only your own chats, task lines and results: asks once for the names task lines give you", () => {
     if (s.names.length) return save({ needs_scope: "mine" });
     const names = (prompt("The names task lines give you, comma-separated (e.g. Anthony, To0wnn):", "") || "").trim();
     if (names) save({ task_names: names, needs_scope: "mine" });
   });
-  pick(`Everyone${s.others ? ` (+${s.others})` : ""}`, !mine, "Also the other people's task lines and results in your projects", () => save({ needs_scope: "all" }));
+  const others = s.others + ck.chats.filter((c) => !c.closed && ckTheirs(c)).length;
+  pick(`Everyone${others ? ` (+${others})` : ""}`, !mine, "Also the other people's chats, task lines and results in your projects", () => save({ needs_scope: "all" }));
   return box;
 }
 // A row's less frequent actions in a small menu (⋯); Esc closes it and gives the focus back.
@@ -1142,7 +1152,7 @@ async function loadSettings() {
   const getLead = setupRolePick("set-model", "set-effort", me.prefs?.chat_default, "The one I used last");
   const getReader = setupRolePick("set-reader-model", "set-reader-effort", me.prefs?.chat_reader);
   const getReview = setupRolePick("set-review-model", "set-review-effort", me.prefs?.chat_review);
-  for (const [id, key, dflt] of [["set-start", "start_page", "chats"], ["set-grid", "grid_open", "tab"], ["set-group", "grid_group", "project"], ["set-send", "send_key", "ctrl"], ["set-live-typing", "live_typing", "on"]]) {
+  for (const [id, key, dflt] of [["set-start", "start_page", "chats"], ["set-grid", "grid_open", "tab"], ["set-group", "grid_group", "project"], ["set-per-part", "grid_per_part", "6"], ["set-send", "send_key", "ctrl"], ["set-live-typing", "live_typing", "on"]]) {
     const pick = $(id); pick.value = me.prefs?.[key] || dflt;
     pick.onchange = async () => {
       try {

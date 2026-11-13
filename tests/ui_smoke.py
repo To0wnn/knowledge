@@ -1441,6 +1441,10 @@ async def board(browser, devices, secret: str) -> None:
     check(fr == '[{"project":"b","n":2,"shut":false},{"project":"","n":1,"shut":false},{"project":"a","n":1,"shut":true}]', f"Grid: frames in the order of the chats, latest first, with counts and folding {fr}")
     fr = await pg.evaluate("JSON.stringify([bdProjects([{project: 'b'}, {project: 'a'}], ['a'], true), bdProjects([], [], true)])")
     check(fr == '[[{"project":"","n":2,"shut":false}],[]]', f"Grid: together is one frame, nothing folded {fr}")
+    fl = await pg.evaluate("""JSON.stringify(bdFlow([{machine: 'x', id: 'c', created: 3}, {machine: 'x', id: 'a', created: 1}, {machine: 'x', id: 'b', created: 2}, {machine: 'x', id: 'd', created: 4}], {'x/d': 1}, 2))""")
+    check(fl == '{"x/d":1,"x/a":1,"x/b":2,"x/c":2}', f"Grid: overflow keeps a placed chat, fills part 1 with the oldest, the rest goes to part 2 {fl}")
+    th = await pg.evaluate("""(() => { const u = me.user; return [ckTheirs({by: 'someone-else'}), ckTheirs({by: u}), ckTheirs({rights: 'view'}), ckTheirs({rights: 'act'}), ckTheirs({kind: 'task', by: 'x'})].join(); })()""")
+    check(th == "true,false,true,false,false", f"Only mine: another person's chat is theirs, a chat without a starter only when you may just view it {th}")
     await pg.wait_for_function("ck.summaryAt > 0", timeout=15000)
     order = await pg.evaluate("""(() => { const keep = [ck.chats, ck.board, agentProject, picks]; agentProject = ''; picks = null;
       ck.chats = [{id: 'run', machine: 'x', status: 'running', updated: 9, raised: 1}, {id: 'done', machine: 'x', status: 'idle', updated: 8, raised: 3},
@@ -2393,7 +2397,7 @@ async def grid_groups(browser, secret: str) -> None:
     if await pg.evaluate("typeof bdProjects") != "function":
         await ctx.close()
         return
-    await pg.evaluate("agentProject = ''; picks = null; bd.held = new Map(); ck.summaryAt = 0; ckSummary()")  # live: the real chats came first
+    await pg.evaluate("agentProject = ''; picks = null; me.prefs.grid_per_part = 'off'; bd.part = null; bd.held = new Map(); ck.summaryAt = 0; ckSummary()")  # live: the real chats came first; parts by hand only
     heads = "[...document.querySelectorAll('#bd .bd-frame-title strong')].map((s) => s.textContent).join()"
     await pg.wait_for_function(f"{heads} !== '' && document.querySelectorAll('#bd .bd-card').length === 4", timeout=5000)
     check(await pg.evaluate(heads) == "ccc,bbb,aaa", f"Grid: the project last active is on top ({await pg.evaluate(heads)})")
@@ -2444,7 +2448,7 @@ async def grid_groups(browser, secret: str) -> None:
     other.on("pageerror", lambda e: other_errors.append(str(e)))
     await other.goto(f"{URL}/ui#/chats")
     await other.wait_for_function("typeof bdRender === 'function' && ck.ready", timeout=15000)
-    await other.evaluate("agentProject = ''; picks = null; ck.summaryAt = 0; ckSummary()")
+    await other.evaluate("agentProject = ''; picks = null; me.prefs.grid_per_part = 'off'; bd.part = null; ck.summaryAt = 0; ckSummary()")
     await other.wait_for_function(f"{cards} === '1,2,3,4'", timeout=5000)
     check(await other.evaluate("bd.part") == 0, "Parts: a new window starts on all, the other window's part is its own")
     await other.evaluate("$('bd-stage').focus()")
@@ -2553,6 +2557,11 @@ async def grid_groups(browser, secret: str) -> None:
     await pg.evaluate("ck.summaryAt = 0; ckSummary().then(() => bdPartShow(0))")  # this window last saw chat 1 raised
     await pg.wait_for_function(f"bd.part === 0 && {cards} === '1,2,3,4' && {heads} === 'bbb,aaa,ccc'", timeout=5000)
 
+    await pg.evaluate("me.prefs.grid_per_part = '2'; bdPartShow(1)")
+    got = await pg.evaluate(f"[{cards}.split(',').filter(Boolean).length, $('bd-parts').children.length, Object.values(bdParts()).sort().join()]")
+    check(got == [2, 3, "1,1,2,2"], f"Parts: with 2 per part the other chats overflow to part 2, its button appears {got}")
+    await pg.evaluate("me.prefs.grid_per_part = 'off'; bdPartShow(0)")
+    await pg.wait_for_function(f"{cards} === '1,2,3,4' && store.get('kn_parts') === '{{}}'", timeout=5000)
     await pg.evaluate("me.prefs.grid_group = 'together'; store.set('kn_board', JSON.stringify({shut: ['bbb']})); bdRender()")
     state = await pg.evaluate("[document.querySelectorAll('#bd .bd-frame').length, getComputedStyle(document.querySelector('#bd .bd-frame')).display, [...bd.wraps.values()].filter((w) => !w.hidden).length, [...document.querySelectorAll('#bd-world > .bd-card')].map((w) => w.dataset.id.slice(-1)).join()]")
     check(state[:3] == [1, "none", 4], f"Grid: together has no headings and nothing folded {state}")
