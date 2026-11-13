@@ -76,10 +76,12 @@ the admin page to be given projects. `KNOWLEDGE_PROXY_IPS` are the addresses tru
 - **Tools loaded at once in Claude Code:** Claude Code defers MCP tools behind ToolSearch, and every session first
   loaded the same few (3 to 4 ToolSearch calls per chat; Haiku repeated one select up to 6 times). The five tools every
   session starts with (`knowledge_chat_title`, `_read`, `_search`, `_semantic_search`, `_edit`) carry
-  `_meta: {"anthropic/alwaysLoad": true}` (`ALWAYS_LOAD` in `server.py`), every other tool says `false`. The client
-  config sets `alwaysLoad: true` on the server too (`plugin/.mcp.json`; on a machine with its own `mcpServers.knowledge`
-  in `~/.claude.json`, set it there): only then does Claude Code wait for the server before the first turn (at most
-  5 s), otherwise a chat whose first message arrives at once still needs ToolSearch. Other agents ignore both.
+  `_meta: {"anthropic/alwaysLoad": true}` (`ALWAYS_LOAD` in `server.py`), which only works once the server is
+  connected. So the client config sets `alwaysLoad: true` on the server as well (`plugin/.mcp.json`; a machine with its
+  own `mcpServers.knowledge` in `~/.claude.json` sets it there): Claude Code then waits for the server before the first
+  turn (at most 5 s) and loads every knowledge tool, about 3,800 tokens of schemas, cached with the prompt (a tool's own
+  `false` does not defer it then; tested 14 Nov 2026). Without it a chat whose first message arrives at once still
+  needed ToolSearch. Other agents ignore both.
 - **Clients** (`plugin/`): one folder that installs as a plugin in Claude Code, Codex and agy. It adds the MCP server,
   the session-start hook, a session log and a docs mirror for guest projects. Codex and agy reach the server through a
   small stdio relay, so the token never sits in a config file. `clients/knowledge-agent.py` sets everything up.
