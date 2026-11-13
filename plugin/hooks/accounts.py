@@ -88,9 +88,9 @@ def sync(d: Path):
             continue
         dst = d / src.name
         if src.is_file() and dst.is_file() and not is_link(dst):
-            if os.name == "nt":  # copy2 keeps the time: any change on either side shows (NTFS times move in ~15 ms steps)
+            if os.name == "nt":  # copy2 keeps the time, but NTFS times move in ~15 ms steps: a small file is compared too
                 a, b = src.stat(), dst.stat()
-                if (a.st_size, a.st_mtime_ns) != (b.st_size, b.st_mtime_ns):
+                if (a.st_size, a.st_mtime_ns) != (b.st_size, b.st_mtime_ns) or a.st_size < 1 << 20 and src.read_bytes() != dst.read_bytes():
                     shutil.copy2(src, dst)
             else:
                 dst.unlink()
