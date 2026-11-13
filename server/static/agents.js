@@ -1358,7 +1358,13 @@ function ckPicker(card) {
     for (const a of [own, ...accounts]) {
       const b = el("button", "ck-mopt ck-acc", `${a.id || "own"}${a.id === main ? " (main)" : ""}`), left = a.pc ? "" : accountLeft(a); b.type = "button";
       if (left) b.append(el("small", null, left)); // what is left of it, at a glance
-      b.title = a.id ? a.email || ({ token: "long-lived token", apikey: "API key" })[a.kind] || "not signed in" : a.pc ? "The pc's own Claude sign-in (its owner's)" : a.email || "The pc's own Claude sign-in";
+      const kindLabel = a.kind === "token" ? (a.preview ? `long-lived token (${a.preview})` : "long-lived token")
+        : a.kind === "apikey" ? (a.preview ? `API key (${a.preview})` : "API key")
+        : a.kind === "login" ? "browser sign-in" : "";
+      const desc = a.pc ? "The pc's own Claude sign-in (its owner's)"
+        : [a.id || "own", a.email, kindLabel, a.plan].filter(Boolean).join(" · ") || "not signed in";
+      const timing = a.pc ? "" : accountTiming(a);
+      b.title = [desc, timing].filter(Boolean).join(" — ");
       b.setAttribute("aria-pressed", String((card.pick.account || "") === a.id));
       b.onclick = (e) => { e.stopPropagation(); card.pick = { ...card.pick, account: a.id, accountSet: true, touched: true }; ckPicker(card); };
       seg.append(b);

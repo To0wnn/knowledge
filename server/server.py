@@ -6661,6 +6661,9 @@ def report_accounts(v) -> list:
         login = str(a.get("login") or "")
         out.append({"id": a["id"], "email": str(a.get("email") or "")[:120], "plan": str(a.get("plan") or "")[:40],
                     "kind": a["kind"] if a.get("kind") in ("login", "token", "apikey") else "", "error": str(a.get("error") or "")[:300],
+                    "preview": str(a.get("preview") or "")[:40],
+                    "at": int(a["at"]) if isinstance(a.get("at"), (int, float)) and 0 < a["at"] < 2e10 else 0,
+                    "expires": int(a["expires"]) if isinstance(a.get("expires"), (int, float)) and 0 < a["expires"] < 2e10 else 0,
                     # the sign-in page of Claude Code's own OAuth: opened by the owner's browser
                     **({"login": login} if login.startswith(("https://claude.com/", "https://claude.ai/")) and len(login) < 2000 else {}),
                     "windows": report_windows(a.get("windows")), "by": str(a.get("by") or "")[:80], "main": a.get("main") is True,
@@ -6679,7 +6682,7 @@ def claude_accounts_for(m: dict, user: str, own_pc: bool) -> list:
     mine = lambda a: a["id"] == "" or a.get("by") == user or (own_pc and not a.get("by"))
     if own_pc:
         return [{**a, "mine": mine(a)} for a in accs]
-    return [{"id": "", "email": "", "plan": "", "kind": "", "error": "", "windows": [], "by": "", "main": False, "mine": True, "pc": True}
+    return [{"id": "", "email": "", "plan": "", "kind": "", "preview": "", "at": 0, "expires": 0, "error": "", "windows": [], "by": "", "main": False, "mine": True, "pc": True}
             if a["id"] == "" else {**a, "mine": True} for a in accs if mine(a)]
 
 

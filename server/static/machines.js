@@ -502,12 +502,19 @@ function accountsCell(m) {
   for (const x of ag.accounts) {
     const line = el("div", "mx-account"), mine = x.mine !== false;
     // the pc's own on a token or key: chats and workers use that, the terminal keeps the sign-in shown beside it
-    const who = x.pc ? "this pc's own sign-in" : !x.id && x.kind ? `${ACCOUNT_KIND[x.kind]} for chats and workers${x.email ? ` (terminal: ${x.email})` : ""}`
-      : x.email || ACCOUNT_KIND[x.kind] || "not signed in";
-    line.append(el("b", null, x.id || "own"), " ", val(who, x.pc || x.email || ACCOUNT_KIND[x.kind] ? "" : "mx-diff"));
+    const kindLabel = x.kind === "token" ? (x.preview ? `long-lived token (${x.preview})` : "long-lived token")
+      : x.kind === "apikey" ? (x.preview ? `API key (${x.preview})` : "API key")
+      : x.kind === "login" ? "browser sign-in" : "";
+    const who = x.pc ? "this pc's own sign-in"
+      : !x.id && x.kind ? `${kindLabel} for chats and workers${x.email ? ` (terminal: ${x.email})` : ""}`
+      : x.email ? `${x.email}${kindLabel && x.kind !== "login" ? ` (${kindLabel})` : ""}`
+      : kindLabel || "not signed in";
+    line.append(el("b", null, x.id || "own"), " ", val(who, x.pc || x.email || x.kind ? "" : "mx-diff"));
     if (x.plan) line.append(" ", val(x.plan, "muted"));
     if (mine && x.id === main) line.append(el("span", "pill", "main"));
     if (!mine) line.append(" ", val(`added by ${x.by || "?"}`, "muted"));
+    const timing = accountTiming(x);
+    if (timing) line.append(" ", val(timing, "muted"));
     if (!x.pc && (usageWindows(x).length || x.kind === "apikey")) line.append(accountBars(x));
     if (x.error) line.append(el("p", "machine-error", x.error));
     const acts = [];
@@ -555,7 +562,7 @@ function accountForm(title, intro, fields, go, send) {
   document.body.append(d); d.showModal(); fields[0]?.[1].focus();
   return closed;
 }
-const ACCOUNT_KIND = { token: "long-lived token", apikey: "API key" };
+const ACCOUNT_KIND = { token: "long-lived token", apikey: "API key", login: "browser sign-in" };
 // How an account signs in: [value, button, what it is, what to paste (none: the browser), its form]
 const ACCOUNT_WAYS = [
   ["login", "Browser", "Sign in with the account in your browser; claude.com then shows a code to paste here. Uses the account's subscription.", "", ""],

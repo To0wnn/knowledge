@@ -1719,6 +1719,27 @@ const usageText = (ag) => usageWindows(ag).map(([p, n], i, all) =>
 // 17:40"), an API key what is left of its monthly budget, or without one what it spent this month (the API has no
 // balance a key can read).
 const leftWhen = (t) => new Date(t * 1000).toLocaleString("en-GB", t - Date.now() / 1000 > 86400 ? { weekday: "short", hour: "2-digit", minute: "2-digit" } : { hour: "2-digit", minute: "2-digit" }).replace(",", "");
+function accountTiming(a) {
+  if (a.pc) return "";
+  const parts = [];
+  const now = Date.now() / 1000;
+  if (a.at && a.at > 0) {
+    const d = Math.max(0, now - a.at);
+    const since = d < 60 ? "just now" : d < 3600 ? `${Math.floor(d / 60)}m ago` : d < 86400 ? `${Math.floor(d / 3600)}h ago` : `${Math.floor(d / 86400)}d ago`;
+    parts.push(`signed in ${since}`);
+  }
+  if (a.expires && a.expires > 0) {
+    const left = a.expires - now;
+    if (left <= 0) parts.push("expired");
+    else {
+      const exp = left < 3600 ? `in ${Math.floor(left / 60)}m` : left < 86400 ? `in ${Math.floor(left / 3600)}h` : `in ${Math.floor(left / 86400)}d`;
+      parts.push(`expires ${exp} (${fmtDay(a.expires)})`);
+    }
+  } else if (a.kind === "apikey") {
+    parts.push("no expiry");
+  }
+  return parts.join(" · ");
+}
 function accountLeft(a) {
   if (a.kind === "apikey") return a.budget ? `$${Math.max(0, a.budget - (a.spent || 0)).toFixed(2)} left of $${a.budget}` : `$${(a.spent || 0).toFixed(2)} spent this month`;
   return usageWindows(a).map(([p, n, r]) => `${usageSpan(n) || n} ${Math.max(0, 100 - Math.round(p))}% left${r ? ` · full ${leftWhen(r)}` : ""}`).join(" · ");
