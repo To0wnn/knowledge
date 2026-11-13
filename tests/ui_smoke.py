@@ -1413,6 +1413,7 @@ async def shell_pages(browser, devices, secret: str) -> None:
               f"{path}: the app's views link to /ui")
     # Admin settings: short labels in plain English, the measured values in the help text under each.
     await pg.click('[data-sec="settings"]')
+    await pg.wait_for_selector("#settings-fields label", timeout=15000)  # the fields come with their data: never read them before
     labels = await pg.locator("#settings-fields label").all_inner_texts()
     helps = await pg.locator("#settings-fields .setting-help").count()
     check(bool(labels) and all(len(t) <= 40 and "calibrated" not in t.lower() and "measured" not in t.lower() for t in labels) and helps == len(labels),
@@ -2580,6 +2581,12 @@ async def grid_groups(browser, secret: str) -> None:
     await other.wait_for_selector(".bd-card.draft", timeout=5000)
     await other.evaluate("bdPartShow(0)")
     check(await other.evaluate("!document.querySelector('.bd-card.draft') && !ck.cards.has(ckKey(CK_DRAFT))"), "Parts: an empty new chat stays behind when you switch")
+    late = await other.evaluate("""(async () => { const real = ckSummary, ms = ck.machines; let go;
+      ck.machines = []; ckSummary = () => new Promise((r) => { go = r; });  // a slow list of pcs
+      try { bdPartShow(8); bdPartShow(0); go(); await new Promise((r) => setTimeout(r, 50)); }
+      finally { ckSummary = real; ck.machines = ms; }
+      return !ck.cards.has(ckKey(CK_DRAFT)) && !document.querySelector('.bd-card.draft'); })()""")
+    check(late, "Parts: a new chat whose pcs came late does not land in the part you went on to")
     await other.evaluate("bdPartShow(7)")
     await other.wait_for_selector(".bd-card.draft", timeout=5000)
     started = await other.evaluate("""(async () => { const d = ck.cards.get(ckKey(CK_DRAFT)); d.where_ = 'x\\n/x/aaa'; d.pick = {agent: 'claude', id: 'opus', effort: ''};

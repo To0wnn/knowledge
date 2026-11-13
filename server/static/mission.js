@@ -52,7 +52,13 @@ function bdPartShow(n) {
   try { sessionStorage.setItem("kn_part", String(n)); } catch { /* blocked: this tab still shows it */ }
   bdSettle(); bdRender(); // another part's order is news to nobody here: no pill for it
   $("bd-stage").scrollTop = 0; $("bd-stage").focus({ preventScroll: true }); bdLoadSoon();
-  if (n && !bdChats().length) $("ck-new").onclick(); // an empty part is there to start something
+  if (n && !bdChats().length) bdNewIn(n); // an empty part is there to start something
+}
+// + New chat in part n, once the pcs are known: never after you went on to another part meanwhile (the list of pcs can
+// take a while on a busy server, and a draft that came late stayed behind in the part you went to)
+async function bdNewIn(n) {
+  if (!ck.machines.length) await ckSummary().catch(() => {});
+  if (bd.part === n) ckNewChat();
 }
 function bdPartMove(key, n) {
   const known = new Set(ck.chats.map(ckKey)), parts = Object.fromEntries(Object.entries(bdParts()).filter(([k]) => known.has(k) && k !== key));
@@ -277,7 +283,7 @@ function bdRender() {
     if (queued.length) {
       bd.queue ||= el("details", "menu bd-queue-menu");
       const wasOpen = bd.queue.open;
-      const sum = el("summary", "chip quiet bd-queue-sum", `Queued ${queued.length} ▾`);
+      const sum = el("summary", "btn small quiet bd-queue-sum", `Queued ${queued.length}`); // it opens a menu: a button (▾ from .menu), not a chip
       sum.title = "Queued tasks waiting for a worker or approval";
       const pop = el("div", "menu-list bd-queue-pop");
       pop.append(...queued.map((i) => {

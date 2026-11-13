@@ -345,7 +345,8 @@ def login(name: str, wait: float = 30, by: str = "", setup: bool = False) -> str
                             rec["url"] = m.group(0)
                     except OSError:
                         break
-            threading.Thread(target=read_pty, daemon=True).start()
+            rec["reader"] = threading.Thread(target=read_pty, daemon=True)
+            rec["reader"].start()
         else:
             p = subprocess.Popen(cmd, stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
                                  env={**e, "BROWSER": NO_BROWSER},
@@ -357,7 +358,8 @@ def login(name: str, wait: float = 30, by: str = "", setup: bool = False) -> str
                     rec["out"].append(line.rstrip())
                     if not rec["url"] and (m := URL.search(line)):
                         rec["url"] = m.group(0)
-            threading.Thread(target=read_pipe, daemon=True).start()
+            rec["reader"] = threading.Thread(target=read_pipe, daemon=True)
+            rec["reader"].start()
 
     end = time.time() + wait
     while not rec["url"] and rec["p"].poll() is None and time.time() < end:
@@ -453,6 +455,8 @@ def code(name: str, text: str, wait: float = 90, by: str = "") -> str:
     with LOCK:
         if LOGINS.get(name) is rec:
             _drop(name)
+    if rec["p"].poll() is not None:  # its last lines (the token, or why it failed) may still be on their way
+        rec["reader"].join(5)
 
     # A 1-year token printed by claude setup-token:
     token = printed_token(rec)

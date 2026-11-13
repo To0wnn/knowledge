@@ -218,7 +218,8 @@ def login(name: str, wait: float = 30, by: str = "") -> str:
                 rec["out"].append(line.rstrip())
                 if not rec["url"] and (m := URL.search(line)):
                     rec["url"] = m.group(0)
-        threading.Thread(target=read, daemon=True).start()
+        rec["reader"] = threading.Thread(target=read, daemon=True)
+        rec["reader"].start()
     end = time.time() + wait
     while not rec["url"] and p.poll() is None and time.time() < end:
         time.sleep(0.1)
@@ -258,6 +259,7 @@ def code(name: str, text: str, wait: float = 90) -> str:
     with LOCK:
         if LOGINS.get(name) is rec:
             _drop(name)
+    rec["reader"].join(5)  # its last lines (why it failed) may still be on their way after agy ended
     said = next((x for x in reversed(rec["out"]) if x.strip()), "no answer")
     if rec["p"].returncode != 0:
         accounts.write(d / INFO, {**accounts.info(d), "error": said[-300:]})
