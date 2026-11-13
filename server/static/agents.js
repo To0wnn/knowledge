@@ -1158,6 +1158,7 @@ async function loadSettings() {
       try {
         me.prefs = (await api("/ui/api/me/prefs", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ [key]: pick.value }) })).prefs;
         for (const c of ck.cards.values()) ckSendHints(c);
+        if (key === "grid_per_part") store.set("kn_parts", "{}"); // a new limit spreads the chats again (in this browser; a move by hand goes too)
         $("set-use-saved").textContent = "Saved"; clearTimeout(pick.savedTimer); pick.savedTimer = setTimeout(() => ($("set-use-saved").textContent = ""), 2000);
       } catch (err) { pick.value = me.prefs?.[key] || dflt; toast(err.message, true); }
     };

@@ -73,7 +73,6 @@ function bdFlow(chats, parts, max) {
 }
 function bdPartFill() {
   const max = bdPerPart();
-  if (store.get("kn_parts_max") !== String(max)) { store.set("kn_parts", "{}"); store.set("kn_parts_max", String(max)); } // a new limit spreads them again
   if (!max) return;
   const parts = bdParts(), next = bdFlow(ck.chats.filter((c) => ckState(c) !== "closed"), parts, max);
   if (Object.keys(next).length !== Object.keys(parts).length) store.set("kn_parts", JSON.stringify(next));

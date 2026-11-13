@@ -2410,7 +2410,7 @@ async def grid_groups(browser, secret: str) -> None:
     if await pg.evaluate("typeof bdProjects") != "function":
         await ctx.close()
         return
-    await pg.evaluate("agentProject = ''; picks = null; me.prefs.grid_per_part = 'off'; bd.part = null; bd.held = new Map(); ck.summaryAt = 0; ckSummary()")  # live: the real chats came first; parts by hand only
+    await pg.evaluate("agentProject = ''; picks = null; me.prefs.grid_per_part = 'off'; store.set('kn_parts', '{}'); bd.part = null; bd.held = new Map(); ck.summaryAt = 0; ckSummary()")  # live: the real chats came first; parts by hand only
     heads = "[...document.querySelectorAll('#bd .bd-frame-title strong')].map((s) => s.textContent).join()"
     await pg.wait_for_function(f"{heads} !== '' && document.querySelectorAll('#bd .bd-card').length === 4", timeout=5000)
     check(await pg.evaluate(heads) == "ccc,bbb,aaa", f"Grid: the project last active is on top ({await pg.evaluate(heads)})")
@@ -2461,7 +2461,7 @@ async def grid_groups(browser, secret: str) -> None:
     other.on("pageerror", lambda e: other_errors.append(str(e)))
     await other.goto(f"{URL}/ui#/chats")
     await other.wait_for_function("typeof bdRender === 'function' && ck.ready", timeout=15000)
-    await other.evaluate("agentProject = ''; picks = null; me.prefs.grid_per_part = 'off'; bd.part = null; ck.summaryAt = 0; ckSummary()")
+    await other.evaluate("agentProject = ''; picks = null; me.prefs.grid_per_part = 'off'; store.set('kn_parts', '{}'); bd.part = null; ck.summaryAt = 0; ckSummary()")
     await other.wait_for_function(f"{cards} === '1,2,3,4'", timeout=5000)
     check(await other.evaluate("bd.part") == 0, "Parts: a new window starts on all, the other window's part is its own")
     await other.evaluate("$('bd-stage').focus()")
@@ -2573,7 +2573,7 @@ async def grid_groups(browser, secret: str) -> None:
     await pg.evaluate("me.prefs.grid_per_part = '2'; bdPartShow(1)")
     got = await pg.evaluate(f"[{cards}.split(',').filter(Boolean).length, $('bd-parts').children.length, Object.values(bdParts()).sort().join()]")
     check(got == [2, 3, "1,1,2,2"], f"Parts: with 2 per part the other chats overflow to part 2, its button appears {got}")
-    await pg.evaluate("me.prefs.grid_per_part = 'off'; bdPartShow(0)")
+    await pg.evaluate("me.prefs.grid_per_part = 'off'; store.set('kn_parts', '{}'); bdPartShow(0)")  # as Settings does
     await pg.wait_for_function(f"{cards} === '1,2,3,4' && store.get('kn_parts') === '{{}}'", timeout=5000)
     await pg.evaluate("me.prefs.grid_group = 'together'; store.set('kn_board', JSON.stringify({shut: ['bbb']})); bdRender()")
     state = await pg.evaluate("[document.querySelectorAll('#bd .bd-frame').length, getComputedStyle(document.querySelector('#bd .bd-frame')).display, [...bd.wraps.values()].filter((w) => !w.hidden).length, [...document.querySelectorAll('#bd-world > .bd-card')].map((w) => w.dataset.id.slice(-1)).join()]")
