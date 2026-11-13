@@ -652,7 +652,7 @@ function accountForm(title, intro, fields, go, send) {
 const ACCOUNT_KIND = { token: "long-lived token", apikey: "API key", login: "browser sign-in" };
 // How an account signs in: [value, button, what it is, what to paste (none: the browser), its form]
 const ACCOUNT_WAYS = [
-  ["login", "Browser", "Sign in with the account in your browser; claude.com then shows a code to paste here. Uses claude setup-token so it holds for 1 year.", "", ""],
+  ["login", "Browser", "Sign in with the account in your browser; claude.com then shows a code to paste here. Uses your Claude subscription with rolling refresh tokens.", "", ""],
   ["token", "Long-lived token", "Run claude setup-token in a terminal on any pc and paste the token it prints. It holds for a year and uses the account's subscription.", "sk-ant-oat01-…", "sk-ant-oat\\d\\d-[\\w\\-]{20,400}"],
   ["apikey", "API key", "An API key from the Anthropic Console (console.anthropic.com > API keys). Billed per use, not the subscription.", "sk-ant-api03-…", "sk-ant-api\\d\\d-[\\w\\-]{20,400}"]];
 function accountAdd(m, account = null) { // null: a new account; "": the pc's own; a name: that account
@@ -670,7 +670,7 @@ function accountAdd(m, account = null) { // null: a new account; "": the pc's ow
   };
   for (const w of ACCOUNT_WAYS) { const b = el("button", null, w[1]); b.type = "button"; b.dataset.way = w[0]; b.onclick = () => pick(w); ways.append(b); }
   const intro = account === null ? ["Chats on this pc can then run under it (the model chip). Settings, plugins and skills stay the pc's own."]
-    : account === "" ? ["Browser signs in via claude.com (1 year token); the terminal keeps its own sign-in in ~/.claude. A long-lived token or API key runs this pc's chats and workers on it instead."] : [];
+    : account === "" ? ["Browser signs in via claude.com; the terminal keeps its own sign-in in ~/.claude. A long-lived token or API key runs this pc's chats and workers on it instead."] : [];
   const shown = accountForm(account === "" ? `This pc's own Claude on ${m.label}` : account ? `Sign ${account} in on ${m.label}` : `Add a Claude account on ${m.label}`,
     [...intro, ways, about], [...(account === null ? [["Name", name]] : []), ["Token", secret]], account === null ? "Add" : "Sign in", () => (way[0] === "login"
       ? machineAction(m, "claude_login", { account: name.value })

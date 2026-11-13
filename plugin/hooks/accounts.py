@@ -276,10 +276,10 @@ def note(name: str, d: Path, **change):
         write(d / INFO, {**info(d), **change})
 
 
-def login(name: str, wait: float = 30, by: str = "", setup: bool = True) -> str:
+def login(name: str, wait: float = 30, by: str = "", setup: bool = False) -> str:
     """Start a browser sign-in for account `name` (made when new; "" signs the pc's own in again); the URL to open.
-    The code goes in with code(). When `setup` is True (default), it runs `claude setup-token` to create a 1-year
-    long-lived token directly; when False, it runs `claude auth login`."""
+    The code goes in with code(). By default it runs `claude auth login` (reliable browser flow with rolling refresh
+    tokens). When `setup` is True, it runs `claude setup-token`."""
     d = where(name)
     if name:
         sync(d)
@@ -331,8 +331,12 @@ def code(name: str, text: str, wait: float = 90) -> str:
             raise RuntimeError("no sign-in waits for a code here (it ends after 15 minutes): press Sign in again")
         by = rec.get("by", "")
         try:
-            rec["p"].stdin.write(clean + "\n")
+            rec["p"].stdin.write(clean + "\n\n")
             rec["p"].stdin.flush()
+            try:
+                rec["p"].stdin.close()
+            except OSError:
+                pass
         except OSError as e:
             raise RuntimeError(f"the sign-in ended: {e}") from e
     try:
@@ -342,6 +346,10 @@ def code(name: str, text: str, wait: float = 90) -> str:
     with LOCK:
         if LOGINS.get(name) is rec:
             _drop(name)
+    # If the process timed out or failed to exit cleanly, check whether credentials were written successfully:
+    cred = (MAIN if not name else d) / ".credentials.json"
+    if rc != 0 and not rec.get("setup") and cred.exists() and time.time() - cred.stat().st_mtime < wait + 15:
+        rc = 0
     if rc != 0:
         said = next((x for x in reversed(rec["out"]) if x.strip()), "no answer")
         note(name, d, error=said[-300:])
@@ -582,7 +590,7 @@ def self_test():
             (fake / "claude").chmod(0o755)
         os.environ["PATH"] = str(fake) + os.pathsep + os.environ["PATH"]
         os.environ["CLAUDE_CONFIG_DIR"] = str(MAIN)  # the pc's own sign-in of this test: never the real ~/.claude
-        url = login("thuis", setup=False)
+        url = login("thuis")
         assert url == "https://claude.com/cai/oauth/authorize?code=true&state=x", url
         assert {a["id"]: a for a in listing()}["thuis"]["login"] == url, "the waiting link shows on the page"
         try:
@@ -591,11 +599,11 @@ def self_test():
         except RuntimeError as e:
             assert "not accepted" in str(e), e
         assert "thuis" not in LOGINS and info(folder("thuis"))["error"], "a failed sign-in ends and says why"
-        login("thuis", setup=False)
+        login("thuis")
         assert code("thuis", "good#code") == "thuis: signed in as w@example.org"
         acc = {a["id"]: a for a in listing()}
         assert acc[""]["email"] == "me@example.org" and acc["thuis"]["kind"] == "login" and "login" not in acc["thuis"], acc
-        assert login("", setup=False) == url and {a["id"]: a for a in listing()}[""]["login"] == url, "the pc's own signs in again the same way"
+        assert login("") == url and {a["id"]: a for a in listing()}[""]["login"] == url, "the pc's own signs in again the same way"
         assert code("", "good#code").startswith("own: signed in") and not (MAIN / INFO).exists(), "no file of ours in ~/.claude"
         assert json.loads((MAIN / ".credentials.json").read_text())["claudeAiOauth"]["accessToken"] == "new"
         assert logout_own() == "own: signed out" and not (MAIN / ".credentials.json").exists()

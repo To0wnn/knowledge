@@ -747,6 +747,7 @@ async def cockpit_shell(browser, devices, secret: str) -> None:
     check(told == ["Needs you: B"], f"notify: once per new Needs-you item, only when on {told}")
     if draft[4]:  # a pc online that reports its models
         await pg.click("#ck-canvas .ck-model summary")
+        await pg.wait_for_function("() => getComputedStyle(document.querySelector('#ck-canvas .ck-model-list')).position === 'fixed'")
         got = await pg.evaluate("""[[...document.querySelectorAll('#ck-canvas .ck-model .ck-mfam')].map(x => x.textContent),
           [...document.querySelectorAll('#ck-canvas .ck-mopt:not(.ck-acc)')].length, document.querySelectorAll('#ck-canvas .ck-mopt:not(.ck-acc)[aria-pressed=true]').length]""")
         check(len(got[0]) >= 1 and got[1] >= 1 and got[2] == 1, f"model chip: families, models, one picked {got}")
