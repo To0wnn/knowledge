@@ -854,7 +854,7 @@ audio.fm-media { width: 100%; }
 .ck-jump[hidden] { display: none; }
 .ck-jump-btn { flex: none; gap: 8px; margin-bottom: 8px; border-radius: 999px; background: var(--panel-solid); box-shadow: var(--shadow); }
 @media (pointer: coarse) { .ck-jump-key { display: none; } }
-.ck-log { overflow-y: auto; overflow-anchor: auto; padding: 12px; display: flex; flex-direction: column; gap: 8px; font-size: 14px; line-height: 1.55; }
+.ck-log { overflow-y: auto; overscroll-behavior: contain; overflow-anchor: auto; padding: 12px; display: flex; flex-direction: column; gap: 8px; font-size: 14px; line-height: 1.55; }
 .ck-msg { white-space: pre-wrap; overflow-wrap: anywhere; }
 .ck-msg.user { align-self: flex-end; max-width: 85%; padding: 8px 12px; border-radius: var(--r-lg); background: var(--act-soft); }
 .ck-msg.agent { align-self: stretch; white-space: normal; }
@@ -1080,7 +1080,7 @@ dialog.pick-several { width: min(380px, calc(100vw - 32px)); }
 /* The chat grid: frames and cards tiled to fill the screen; mission.js sets --bg-cols and --bg-row from the stage (two
    rows at most on screen, more scroll). A frame is a heading row, hidden with one project (unless folded). */
 .bd { position: relative; min-height: 0; overflow: hidden; }
-.bd-stage { position: absolute; inset: 0; overflow: hidden auto; }
+.bd-stage { position: absolute; inset: 0; overflow: hidden; }
 .bd-stage:focus-visible { outline-offset: -2px; } /* it fills a clipping box: the ring goes inside */
 .bd-world { display: grid; grid-template-columns: repeat(var(--bg-cols, 2), minmax(0, 1fr)); gap: 16px; padding: 16px; }
 .bd-none { width: 360px; }
@@ -1101,8 +1101,20 @@ dialog.pick-several { width: min(380px, calc(100vw - 32px)); }
 .bd-needs-head { grid-column: 1 / -1; display: flex; align-items: center; gap: 10px; margin: 0; font-size: 13px; font-weight: 600; color: var(--amber-ink); }
 .ck-scope { display: inline-flex; padding: 2px; margin-left: auto; text-transform: none; letter-spacing: normal; font-weight: 400; }
 .ck-scope button { height: 24px; font-size: 12px; }
+.head-actions .ck-scope { margin: 0; }
+#ck-scope-slot { display: inline-flex; align-items: center; }
+#ck-scope-slot:empty { display: none; }
 .bd-needs .ck-item { margin: 0; }
 #ck-view .n { margin-left: 6px; color: var(--act-text); font-weight: 600; font-variant-numeric: tabular-nums; }
+#ck-view.hot { color: var(--amber); font-weight: 700; }
+#ck-view.hot .n { color: var(--amber); }
+#ck-view.hot:hover:not(:disabled) { color: var(--amber); }
+#bd-queue-slot { display: inline-flex; align-items: center; }
+#bd-queue-slot:empty { display: none; }
+.bd-queue-menu summary { list-style: none; cursor: pointer; user-select: none; }
+.bd-queue-menu summary::-webkit-details-marker { display: none; }
+.bd-queue-pop { max-width: 420px; max-height: 50vh; overflow-y: auto; }
+@media (min-width: 700px) { .ck-sec-head .ck-scope { display: none; } }
 #bd-parts { display: inline-flex; gap: 2px; }
 #bd-parts:empty { display: none; }
 #bd-parts .btn[aria-pressed="true"] { background: var(--hover); color: var(--ink); font-weight: 600; }
@@ -1113,8 +1125,6 @@ dialog.pick-several { width: min(380px, calc(100vw - 32px)); }
 .bd-card[hidden] { display: none; }
 .bd-card:hover, .bd-card:focus-within { outline: 2px solid var(--act); outline-offset: 2px; } /* the card the shortcuts act on when focus is elsewhere */
 .bd-card > .ck-card { min-height: 0; height: 100%; }
-.bd-card .ck-log { overflow-y: hidden; }
-.bd-card:focus-within .ck-log { overflow-y: auto; overscroll-behavior: contain; }
 .bd-card .ck-git-slot { display: none; } /* the full chat has it; a card's header keeps room for its title */
 .bd-card.needs > .ck-card { border-color: var(--amber); box-shadow: 0 0 0 1px var(--amber); }
 .bd-card .ck-x:not(.bd-only), .bd-only { display: none; }
@@ -1123,9 +1133,10 @@ dialog.pick-several { width: min(380px, calc(100vw - 32px)); }
 .bd-card.draft .ck-x.bd-only { display: none; }
 .bd-card .ck-dot.bd-only { display: block; flex: none; }
 .bd-card .ck-box textarea { min-height: 22px; }
-@media (max-width: 999.98px) { #ck-view, #bd-parts, .bd { display: none !important; } } /* the grid and flow are desktop only: the list stays */
+@media (max-width: 999.98px) { #ck-view, #bd-parts, #bd-queue-slot, .bd { display: none !important; } } /* the grid and flow are desktop only: the list stays */
 #ck-diff-body { max-height: 65vh; overflow: auto; }
 @media (max-width: 699.98px) {
+  #ck-scope-slot { display: none !important; }
   .ck { overflow: visible; }
   .ck-head { flex-wrap: wrap; }
   .ck-git-slot { order: 5; flex-basis: 100%; max-width: 100%; }

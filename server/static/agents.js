@@ -76,6 +76,7 @@ async function ckSummary() {
     return c;
   });
   $("ck-resets").replaceChildren(...chips); $("ck-resets").hidden = !chips.length;
+  ckScopeRender();
   for (const [k, card] of ck.cards) {
     if (card.worker) {
       const hit = ckFindWorker(`worker/${card.worker}`);
@@ -171,6 +172,7 @@ function ckGetStarted() {
 }
 function ckList() {
   const box = $("ck-list"), hist = $("ck-history"), side = $("ck-side");
+  ckScopeRender();
   // a half-typed reply or reason, or an open menu, outlives the refresh: the list waits until it is sent or closed
   if (side.querySelector(".ck-reply, .ck-answer, .ck-snooze[open]") || selecting(side)) return;
   const had = side.contains(document.activeElement) && document.activeElement.dataset.row;
@@ -577,6 +579,7 @@ function ckItem(i) {
   if (i.kind === "chat" && chat?.sub_list?.length) card.append(ckItemSubs(chat));
   return card;
 }
+function ckScopeRender() { const slot = $("ck-scope-slot"); if (slot) slot.replaceChildren(ckScopeSwitch()); }
 // Needs you: only your own task lines and results, or everyone's in your projects (a shared project has the others'
 // too). "Only mine" needs the names task lines give you: asked once, then saved in Settings (task_names).
 function ckScopeSwitch() {
