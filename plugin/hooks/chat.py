@@ -564,21 +564,95 @@ def auto_allowed(kind: str, name: str, inp, folder: str) -> bool:
 def agy_handlers(cid: str, folder: str, live: list):
     """(note, request) for agy over ACP: its session updates as chat events (none while live[0] is false: session/load
     replays the history), its permission requests answered by auto_allowed() or the owner. Used by AgyLive."""
-    subs = set()  # tool call ids of agy's subagents
+    subs = {}       # toolCallId -> {"role": str, "conv_id": str}
+    conv_subs = {}  # conversationId -> toolCallId
+    cmds = {}       # toolCallId -> {"label": str}
+    tasks = {}      # taskId -> toolCallId
 
     def note(method, params):
         u = params.get("update") or {}
         k = u.get("sessionUpdate")
         if not live[0] or method != "session/update":
             return []
+
+        msg_text = str(u.get("content") or "")
+        if m_fin := re.search(r'Task id\s*"?[^"\s\n]+/([^\s"\n]+)"?\s+finished', msg_text):
+            tid = m_fin.group(1)
+            tasks.pop(tid, None)
+            return [("bg", "", tid, "done")]
+        if m_sub_fin := re.search(r'sender=([^\s\n,\'"]+)', msg_text):
+            cid_sub = m_sub_fin.group(1)
+            if cid_sub in conv_subs:
+                tcid = conv_subs.pop(cid_sub)
+                subs.pop(tcid, None)
+                return [("sub", "done", tcid, "done")]
         if k == "agent_message_chunk" and (u.get("content") or {}).get("text"):
             return [("text", u["content"]["text"])]
-        if k == "tool_call" and (u.get("name") == "invoke_subagent" or str(u.get("title") or "").startswith("invoke_subagent")):  # agy's
-            subs.add(u.get("toolCallId", ""))
+        if k == "tool_call" and (u.get("name") == "invoke_subagent" or str(u.get("title") or "").startswith("invoke_subagent")):
+            tcid = u.get("toolCallId", "")
             inp = u.get("rawInput") or u.get("args") or {}
-            return [("sub", str(inp.get("Role") or u.get("title") or "subagent")[:200], u.get("toolCallId", ""), "running")]
-        if k == "tool_call_update" and u.get("toolCallId") in subs and u.get("status") in ("completed", "failed"):
-            return [("sub", u["status"] == "completed" and "done" or "failed", u["toolCallId"], "done" if u["status"] == "completed" else "failed")]
+            role = str(inp.get("Role") or u.get("title") or "subagent")[:200]
+            subs[tcid] = {"role": role, "conv_id": ""}
+            return [("sub", role, tcid, "running")]
+        if k == "tool_call_update" and u.get("toolCallId") in subs:
+            tcid = u["toolCallId"]
+            if u.get("status") == "failed":
+                subs.pop(tcid, None)
+                return [("sub", "failed", tcid, "failed")]
+            raw = u.get("rawOutput") or {}
+            if isinstance(raw, dict) and raw.get("conversationId"):
+                conv_id = str(raw["conversationId"])
+                subs[tcid]["conv_id"] = conv_id
+                conv_subs[conv_id] = tcid
+            # Do not emit done on completed launch: subagent continues running in background
+            return []
+        if k == "tool_call" and (u.get("name") == "run_command" or str(u.get("title") or "").startswith("run_command")):
+            tcid = u.get("toolCallId", "")
+            inp = u.get("rawInput") or u.get("args") or {}
+            cmds[tcid] = {"label": str(inp.get("toolSummary") or inp.get("CommandLine") or u.get("title") or "shell")[:120]}
+        if k == "tool_call_update" and u.get("toolCallId") in cmds:
+            tcid = u["toolCallId"]
+            c_info = cmds.pop(tcid, {})
+            out_text = ""
+            if isinstance(u.get("content"), list):
+                for c in u["content"]:
+                    if isinstance(c, dict):
+                        if c.get("type") == "content" and isinstance(c.get("content"), dict):
+                            out_text += c["content"].get("text", "")
+                        elif c.get("type") == "text":
+                            out_text += c.get("text", "")
+            if not out_text and isinstance(u.get("rawOutput"), dict):
+                out_text = str(u["rawOutput"].get("output") or "")
+            if "running as a background task" in out_text or "running in the background as task" in out_text:
+                m_task = re.search(r'task id:\s*([^\s\n]+)', out_text)
+                m_log = re.search(r'Task logs are available at:\s*file://([^\s\n]+)', out_text)
+                if m_task:
+                    tid = m_task.group(1).split("/")[-1]
+                    log_file = m_log.group(1) if m_log else ""
+                    tasks[tid] = tcid
+                    return [("bg", c_info.get("label", "shell"), tid, "running", log_file)]
+        if k == "tool_call" and u.get("name") == "manage_task":
+            inp = u.get("rawInput") or u.get("args") or {}
+            if inp.get("Action") == "kill" and inp.get("TaskId"):
+                tid = str(inp["TaskId"]).split("/")[-1]
+                tasks.pop(tid, None)
+                return [("bg", "", tid, "done")]
+        if k == "tool_call" and u.get("name") == "manage_subagents":
+            inp = u.get("rawInput") or u.get("args") or {}
+            if inp.get("Action") == "kill_all":
+                evs = [("sub", "done", t, "done") for t in list(subs.keys())]
+                subs.clear(); conv_subs.clear()
+                return evs
+            if inp.get("Action") == "kill" and inp.get("ConversationIds"):
+                evs = []
+                for cid_sub in inp["ConversationIds"]:
+                    tcid = conv_subs.pop(cid_sub, None) or subs.get(cid_sub)
+                    if tcid and tcid in subs:
+                        subs.pop(tcid, None)
+                        evs.append(("sub", "done", tcid, "done"))
+                if evs:
+                    return evs
+
         if k == "tool_call":
             return [("tool", f"{u.get('name') or u.get('title')}: {summary(u.get('rawInput') or u.get('args'))}".rstrip(": "))]
         if k == "tool_call_update" and u.get("status") == "failed":
@@ -1683,9 +1757,8 @@ class CodexLive(Live):
 
 class AgyLive(CodexLive):
     """An agy chat as one running agy: with YOLO `agy --input-format stream-json` (a turn per message, in agy's own
-    line), without it `agy acp` (one session/prompt at a time, the next waits here). Measured on agy 1.4.12: a message
-    sent during a turn runs as the next turn, and there is no interrupt, so Force and Stop end the process and the
-    conversation goes on in a new one (--conversation / session/load)."""
+    line), without it `agy acp` (one session/prompt at a time, messages sent during a turn steer it over ACP). Force
+    ends that agy and a new one takes the conversation on (--conversation / session/load); Stop ends the turn."""
 
     def command(self, exe: str) -> list:
         return argv("agy", exe, True, self.st["session"], self.cid, self.pick[0], "") if self.yolo else [exe, "acp"]
@@ -1693,6 +1766,9 @@ class AgyLive(CodexLive):
     def started(self):
         self.res, self.ids, self.turn_id, self.lines, self.answered, self.ended = {}, itertools.count(1), "", [], 0, set()
         self.replayed, self.force_text, self.restarting, self.carry, self.wtexts, self.calls = [False], None, False, [], [], {}
+        self.active_box, self.active_id = None, None
+        self.bg, self.bg_out = {}, {}
+        self.subs, self.sub_convs = set(), {}
         if self.yolo:
             threading.Thread(target=self.read_stream, daemon=True).start()
             return
@@ -1713,7 +1789,7 @@ class AgyLive(CodexLive):
     def live_state(self) -> dict:
         w = list(self.wtexts)
         return {**super().live_state(), "wtexts": w[-20:], "wbase": max(0, len(w) - 20), "lines": list(self.lines),
-                "prompt": self.calls.get("session/prompt") if self.turn_open and not self.yolo else None}
+                "prompt": (self.active_id or self.calls.get("session/prompt")) if self.turn_open and not self.yolo else None}
 
     def resumed(self, s: dict, new_in: list):
         self.res, self.ids, self.turn_id, self.ended, self.calls = {}, itertools.count(s["next_id"]), "", set(), {}
@@ -1721,6 +1797,9 @@ class AgyLive(CodexLive):
         if s.get("prompt") is not None:  # still running: a second restart must know it too
             self.calls["session/prompt"] = s["prompt"]
         self.lines, self.answered, self.carry, self.force_text, self.restarting, self.replayed = s["lines"], s["answered"], [], None, False, [True]
+        self.active_box, self.active_id = None, None
+        self.bg, self.bg_out = dict(s.get("bg") or {}), dict(s.get("bg_out") or {})
+        self.subs, self.sub_convs = set(s.get("subs") or []), {}
         # only the last texts are kept: earlier slots stay empty (a Force carries what was not answered, never those)
         self.wtexts = [""] * s["wbase"] + s["wtexts"]
         if self.yolo:
@@ -1733,6 +1812,8 @@ class AgyLive(CodexLive):
         box = None
         if s.get("prompt") is not None:  # its turn's session/prompt still runs: its answer ends the turn here
             box = self.res[s["prompt"]] = {"done": threading.Event()}  # filed before the reader can read the answer
+            self.active_box, self.active_id = box, s["prompt"]
+            self.turn_open = True
         threading.Thread(target=self.read, daemon=True).start()
         if box is not None:
             threading.Thread(target=self.prompts, args=(box,), daemon=True).start()
@@ -1768,38 +1849,108 @@ class AgyLive(CodexLive):
     def list_commands(self):  # ACP sends its own (available_commands_update, on_note)
         pass
 
+    def check_background(self):
+        """Check if any background task log has finished, or any subagent state changed."""
+        for tid, log_path in list(self.bg_out.items()):
+            if log_path and os.path.isfile(log_path):
+                try:
+                    with open(log_path, "rb") as fh:
+                        fh.seek(max(0, os.path.getsize(log_path) - 500))
+                        tail = fh.read().decode("utf-8", "replace")
+                    if "Command exited with code" in tail or "finished with result" in tail:
+                        self.bg.pop(tid, None)
+                        self.bg_out.pop(tid, None)
+                except Exception:
+                    pass
+        for tcid, conv_id in list(self.sub_convs.items()):
+            if tcid not in self.subs:
+                self.sub_convs.pop(tcid, None)
+                continue
+            sub_file = Path.home() / ".gemini" / "antigravity-cli" / "brain" / self.st["session"] / ".system_generated" / "subagents" / f"{conv_id}.json"
+            if sub_file.is_file():
+                try:
+                    s_data = json.loads(sub_file.read_text("utf-8"))
+                    if s_data.get("state") not in (None, "SUBAGENT_STATE_ALIVE"):
+                        self.subs.discard(tcid)
+                        self.sub_convs.pop(tcid, None)
+                        self.buf.append(("sub", "done", tcid, "done"))
+                except Exception:
+                    pass
+
+    def flush(self, **end):
+        self.check_background()
+        super().flush(**end)
+
     def on_note(self, method: str, params: dict):  # ACP: session updates
         self.last = time.time()
         u = params.get("update") or {}
-        if u.get("sessionUpdate") == "available_commands_update":
+        k = u.get("sessionUpdate")
+        if k == "available_commands_update":
             seen_commands("agy", u.get("availableCommands") or [])
-        self.buf += self.note(method, params) or []
+        if not self.replayed[0]:
+            return
+        evs = self.note(method, params) or []
+        for e in evs:
+            if e[0] == "bg":
+                if e[3] == "running":
+                    self.bg[e[2]] = e[1][:120]
+                    if len(e) > 4 and e[4]:
+                        self.bg_out[e[2]] = e[4]
+                else:
+                    self.bg.pop(e[2], None)
+                    self.bg_out.pop(e[2], None)
+            elif e[0] == "sub" and len(e) > 3:
+                if e[3] == "running":
+                    self.subs.add(e[2])
+                else:
+                    self.subs.discard(e[2])
+                    self.sub_convs.pop(e[2], None)
+        self.buf += [e for e in evs if e[0] != "bg"]
+        self.check_background()
         if time.time() - self.flushed >= FLUSH:
             self.flush()
 
     def prompts(self, pending: dict | None = None):
-        """ACP: one session/prompt at a time; the messages that came meanwhile go next, in order. `pending`: the prompt
-        a companion before this one sent, whose answer is still to come."""
+        """ACP: one session/prompt at a time; messages sent while running steer the turn over ACP.
+        `pending`: the prompt a companion before this one sent, whose answer is still to come."""
         while True:
             if pending is None:
                 with self.lock:
                     if not self.lines:
                         self.turn_open = False
+                        self.active_box = self.active_id = None
+                        self.calls.pop("session/prompt", None)
                         self.done()
                         return
                     text = self.lines.pop(0)
                     self.turn_open = True
+                    rid, box = next(self.ids), {"done": threading.Event()}
+                    self.res[rid], self.calls["session/prompt"] = box, rid
+                    self.active_box, self.active_id = box, rid
+                self.rpc({"id": rid, "method": "session/prompt", "params": {"sessionId": self.st["session"], "prompt": [{"type": "text", "text": text}]}})
+            else:
+                pending = None
             try:
-                if pending is not None:
-                    r, pending = self.answer_of(pending, "session/prompt", 24 * 3600), None
-                else:
-                    r = self.call("session/prompt", {"sessionId": self.st["session"], "prompt": [{"type": "text", "text": text}]}, timeout=24 * 3600)
+                while True:
+                    with self.lock:
+                        curr_box = self.active_box
+                    if curr_box is None:
+                        break
+                    r = self.answer_of(curr_box, "session/prompt", 24 * 3600)
+                    with self.lock:
+                        if self.active_box is not curr_box:
+                            continue
+                        self.active_box = self.active_id = None
+                        self.calls.pop("session/prompt", None)
+                        break
                 if r.get("stopReason") not in (None, "end_turn"):
                     with self.lock:
                         self.buf.append(("info", f"The turn ended: {r['stopReason']}"))
             except RuntimeError as e:
                 with self.lock:
                     self.lines.clear()
+                    self.active_box = self.active_id = None
+                    self.calls.pop("session/prompt", None)
                     if self.alive():
                         self.done(f"agy: {e}"[:300])
                 return
@@ -1824,10 +1975,20 @@ class AgyLive(CodexLive):
                 self.wtexts.append(text)
                 self.write(stdin_for("agy", text))
                 return
-            self.lines.append(text)
-            running = self.turn_open
-            self.turn_open = True
-        if not running:
+            if self.turn_open and self.active_box is not None:
+                # Active turn running over ACP: steer it directly into the running turn!
+                rid, box = next(self.ids), {"done": threading.Event()}
+                self.res[rid], self.calls["session/prompt"] = box, rid
+                self.active_box, self.active_id = box, rid
+                steer_rpc = {"id": rid, "method": "session/prompt", "params": {"sessionId": self.st["session"], "prompt": [{"type": "text", "text": text}]}}
+            else:
+                steer_rpc = None
+                self.lines.append(text)
+                running = self.turn_open
+                self.turn_open = True
+        if steer_rpc is not None:
+            self.rpc(steer_rpc)
+        elif not running:
             threading.Thread(target=self.prompts, daemon=True).start()
 
     def restart(self):
@@ -1839,12 +2000,18 @@ class AgyLive(CodexLive):
         with self.lock:
             if self.busy:
                 self.stop_asked, self.force_text, self.carry, self.restarting = True, None, [], False
+                self.active_box = self.active_id = None
                 if self.p.poll() is None:
                     self.restart()
 
     def gone(self):
         with self.lock:
             text, carry, self.force_text = self.force_text, self.carry, None
+            self.bg.clear()
+            self.bg_out.clear()
+            self.subs.clear()
+            self.sub_convs.clear()
+            self.active_box = self.active_id = None
         if text is None:  # no Force: an idle close, a Stop, a crash
             return super().gone()
         code = self.p.wait()
@@ -2232,6 +2399,20 @@ def self_test():
         "Command running in background with ID: b1. Output is being written to: C:\\Temp\\claude\\tasks\\b1.output. You will be notified"}]}})
     m = BG_OUT.search(out_line)
     assert m and m[1] == "b1" and json.loads(f'"{m[2]}"') == "C:\\Temp\\claude\\tasks\\b1.output", m
+    # agy background command and subagent in agy_handlers
+    anote, areq = agy_handlers("c1", "/tmp", [True])
+    ev1 = anote("session/update", {"update": {"sessionUpdate": "tool_call", "name": "invoke_subagent", "toolCallId": "sa1", "rawInput": {"Role": "Researcher"}}})
+    assert ev1 == [("sub", "Researcher", "sa1", "running")], ev1
+    ev2 = anote("session/update", {"update": {"sessionUpdate": "tool_call_update", "toolCallId": "sa1", "status": "completed", "rawOutput": {"conversationId": "cid-sub-1"}}})
+    assert ev2 == [], "completed launch does not end subagent"
+    ev3 = anote("session/update", {"update": {"sessionUpdate": "agent_message_chunk", "content": {"text": "sender=cid-sub-1 done"}}})
+    assert ev3 == [("sub", "done", "sa1", "done")], ev3
+    anote("session/update", {"update": {"sessionUpdate": "tool_call", "name": "run_command", "toolCallId": "cmd1", "rawInput": {"CommandLine": "sleep 10", "toolSummary": "Quick sleep"}}})
+    ev5 = anote("session/update", {"update": {"sessionUpdate": "tool_call_update", "toolCallId": "cmd1", "status": "completed", "rawOutput": {
+        "output": "Tool is running as a background task with task id: sess/task-42\nTask logs are available at: file:///tmp/task-42.log"}}})
+    assert ev5 == [("bg", "Quick sleep", "task-42", "running", "/tmp/task-42.log")], ev5
+    ev6 = anote("session/update", {"update": {"sessionUpdate": "agent_message_chunk", "content": {"text": 'Task id "sess/task-42" finished with result:\nCommand exited with code 0.'}}})
+    assert ev6 == [("bg", "", "task-42", "done")], ev6
     st = {}  # in the background: the launch keeps it running, the task-notification (tool-use-id, or task-id) ends it
     for tu, note in (("tu7", "<tool-use-id>tu7</tool-use-id>"), ("tu8", "<task-id>ag8</task-id>")):
         lines = ['{"type":"assistant","message":{"content":[{"type":"tool_use","id":"%s","name":"Agent","input":{"description":"bg"}}]}}' % tu,
