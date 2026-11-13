@@ -59,12 +59,24 @@ function bdPartMove(key, n) {
 }
 // Settings: at most this many chats per part (0: no limit, parts only by hand).
 const bdPerPart = () => (me.prefs?.grid_per_part === "off" ? 0 : Number(me.prefs?.grid_per_part) || 6);
-// The overflow, pure (ui_smoke checks it): each open chat no part holds yet goes to the lowest part with room, the oldest
-// first, and is stored there like a move by hand, so it stays when others close (a chat never jumps between windows).
-function bdFlow(chats, parts, max) {
-  const out = { ...parts }, count = {};
+// The overflow, pure (ui_smoke checks it): open chats fill each part up to max (the oldest first). When chats close,
+// higher parts auto-reduce into earlier ones so empty parts disappear (a placed chat stays until a lower part has room).
+function bdFlow(chats, parts = {}, max = 6) {
+  if (!max) return { ...parts };
+  const known = new Set(chats.map(ckKey)), out = {};
+  for (const [k, p] of Object.entries(parts)) if (known.has(k)) out[k] = p;
+  const count = {};
   for (const c of chats) if (out[ckKey(c)]) count[out[ckKey(c)]] = (count[out[ckKey(c)]] || 0) + 1;
-  for (const c of chats.filter((x) => !out[ckKey(x)]).sort((a, b) => (a.created || 0) - (b.created || 0))) {
+  const sorted = [...chats].sort((a, b) => (a.created || 0) - (b.created || 0));
+  for (let p = 1; ; p++) {
+    const higher = sorted.filter((c) => out[ckKey(c)] && out[ckKey(c)] > p);
+    if (!higher.length) break;
+    while ((count[p] || 0) < max && higher.length) {
+      const c = higher.shift(), q = out[ckKey(c)];
+      out[ckKey(c)] = p; count[p] = (count[p] || 0) + 1; count[q] = Math.max(0, (count[q] || 0) - 1);
+    }
+  }
+  for (const c of sorted.filter((x) => !out[ckKey(x)])) {
     let n = 1;
     while ((count[n] || 0) >= max) n++;
     out[ckKey(c)] = n; count[n] = (count[n] || 0) + 1;
@@ -74,8 +86,16 @@ function bdFlow(chats, parts, max) {
 function bdPartFill() {
   const max = bdPerPart();
   if (!max) return;
-  const parts = bdParts(), next = bdFlow(ck.chats.filter((c) => ckState(c) !== "closed"), parts, max);
-  if (Object.keys(next).length !== Object.keys(parts).length) store.set("kn_parts", JSON.stringify(next));
+  const live = ck.chats.filter((c) => ckState(c) !== "closed");
+  const parts = bdParts(), next = bdFlow(live, parts, max);
+  if (JSON.stringify(next) !== JSON.stringify(parts)) store.set("kn_parts", JSON.stringify(next));
+  if (bd.part > 1 && !ck.cards.has(ckKey(CK_DRAFT))) {
+    const top = Math.max(1, ...live.map((c) => next[ckKey(c)] || 1));
+    if (bd.part > top) {
+      bd.part = top;
+      try { sessionStorage.setItem("kn_part", String(top)); } catch {}
+    }
+  }
 }
 addEventListener("storage", (e) => { if (e.key === "kn_parts") bdRender(); }); // moved in another window
 // Alt+0-9 show a part; Alt+Shift+1-9 moves the card you are in or point at there (Settings can change both).
@@ -281,6 +301,7 @@ function bdRender() {
       if (!w) {
         w = el("article", "bd-card"); w.tabIndex = 0; w.dataset.id = c.id;
         bd.wraps.set(k, w); back.push(card);
+        w.addEventListener("pointerdown", () => { if (!w.contains(document.activeElement)) w.focus({ preventScroll: true }); });
         w.addEventListener("keydown", (e) => { if (e.key === "Enter" && e.target === w) { e.preventDefault(); if (card.meta.draft) card.input.focus(); else card.openTab.click(); } });
       }
       if (card.root.parentNode !== w) w.replaceChildren(card.root); // back from the full chat (ckLayout moved it there); a new draft replaces an old one
