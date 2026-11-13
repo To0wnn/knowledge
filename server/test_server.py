@@ -1633,6 +1633,10 @@ def share_contract(tmp, ck, fr, raw, er, et):
     assert act("claude_budget", {"account": "home", "usd": -1}) == 400 and act("claude_budget", {"account": "home", "usd": 25}) == 200
     assert act("claude_logout", {"account": ""}) == 400 and act("claude_logout", {"account": "home", "confirm": "SIGN OUT"}) == 400
     assert act("claude_logout", {"account": "", "confirm": "SIGN OUT"}) == 200 and act("claude_login", {"account": ""}) == 200
+    assert act("claude_token", {"account": "", "token": tok}) == 200 and act("claude_budget", {"account": "", "usd": 9}) == 200, \
+        "the owner puts the pc's own on a long-lived token or key (behind its sign-in)"
+    assert act("claude_token", {"account": "", "token": tok}, er) == 403 and act("claude_remove", {"account": ""}) == 400, \
+        "a guest never; and the pc's own is never removed"
     queued = [a for a in json.loads(http("GET", "/machine/actions", token=fr, headers=pc)[1])["actions"]]
     assert [(a["action"], a["by"]) for a in queued][:2] == [("claude_token", "erin"), ("claude_remove", "erin")], queued
     for a in queued:

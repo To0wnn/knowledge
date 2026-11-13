@@ -501,7 +501,9 @@ function accountsCell(m) {
   const box = el("div", "mx-accounts"), steer = accountSteer(m), main = m.claudeMain || "";
   for (const x of ag.accounts) {
     const line = el("div", "mx-account"), mine = x.mine !== false;
-    const who = x.pc ? "this pc's own sign-in" : x.email || ACCOUNT_KIND[x.kind] || (x.id ? "not signed in" : "not signed in");
+    // the pc's own on a token or key: chats and workers use that, the terminal keeps the sign-in shown beside it
+    const who = x.pc ? "this pc's own sign-in" : !x.id && x.kind ? `${ACCOUNT_KIND[x.kind]} for chats and workers${x.email ? ` (terminal: ${x.email})` : ""}`
+      : x.email || ACCOUNT_KIND[x.kind] || "not signed in";
     line.append(el("b", null, x.id || "own"), " ", val(who, x.pc || x.email || ACCOUNT_KIND[x.kind] ? "" : "mx-diff"));
     if (x.plan) line.append(" ", val(x.plan, "muted"));
     if (mine && x.id === main) line.append(el("span", "pill", "main"));
@@ -519,14 +521,15 @@ function accountsCell(m) {
       acts.push(machineButton(x.kind ? "Change sign-in…" : "Sign in…", `Sign ${x.id} in: browser, long-lived token or API key`, () => accountAdd(m, x.id),
         busy || pendingAction(m, "claude_token", (y) => y.account === x.id) || pendingAction(m, "claude_key", (y) => y.account === x.id)));
     } else if (steer && x.id === "" && m.own) { // the pc's own: the companion stays online, so it signs in again from here
-      acts.push(machineButton(x.email ? "Sign in again" : "Sign in", "Sign this pc's own Claude in with the browser", () => machineAction(m, "claude_login", { account: "" }), busy));
+      acts.push(machineButton(x.email || x.kind ? "Change sign-in…" : "Sign in…", "This pc's own Claude: browser sign-in, or a long-lived token or API key behind it",
+        () => accountAdd(m, ""), busy || pendingAction(m, "claude_token", (y) => y.account === "") || pendingAction(m, "claude_key", (y) => y.account === "")));
       if (x.email) acts.push(machineButton("Sign out…", "Sign this pc's own Claude out", () => {
         const word = prompt(`Sign ${m.label}'s own Claude out? Its terminal sessions, workers and chats on it stop until it signs in again (Sign in here). Type SIGN OUT to go on.`);
         return word === "SIGN OUT" ? machineAction(m, "claude_logout", { account: "", confirm: word }) : null;
       }, pendingAction(m, "claude_logout"), "btn small quiet"));
     }
     if (steer && mine && x.kind === "apikey") acts.push(machineButton("Budget…", "A monthly budget: the page shows what is left of it", () => {
-      const v = prompt(`Monthly budget for ${x.id} in dollars (0: none)`, x.budget || "");
+      const v = prompt(`Monthly budget for ${x.id || "this pc's own"} in dollars (0: none)`, x.budget || "");
       return v === null || !Number.isFinite(Number(v)) || Number(v) < 0 ? null : machineAction(m, "claude_budget", { account: x.id, usd: Number(v) });
     }, pendingAction(m, "claude_budget", (y) => y.account === x.id), "btn small quiet"));
     if (steer && x.id && (mine || m.own)) acts.push(machineButton("Remove", `Sign ${x.id} out on ${m.label} and remove it`, () => confirm(`Remove the Claude account ${x.id} from ${m.label}? Chats that use it go back to the pc's own sign-in.`) ? machineAction(m, "claude_remove", { account: x.id }) : null,
@@ -558,10 +561,10 @@ const ACCOUNT_WAYS = [
   ["login", "Browser", "Sign in with the account in your browser; claude.com then shows a code to paste here. Uses the account's subscription.", "", ""],
   ["token", "Long-lived token", "Run claude setup-token in a terminal on any pc and paste the token it prints. It holds for a year and uses the account's subscription.", "sk-ant-oat01-…", "sk-ant-oat\\d\\d-[\\w\\-]{20,400}"],
   ["apikey", "API key", "An API key from the Anthropic Console (console.anthropic.com > API keys). Billed per use, not the subscription.", "sk-ant-api03-…", "sk-ant-api\\d\\d-[\\w\\-]{20,400}"]];
-function accountAdd(m, account = "") {
+function accountAdd(m, account = null) { // null: a new account; "": the pc's own; a name: that account
   const name = el("input"), secret = el("input"), ways = el("div", "seg"), about = el("p", "muted");
   name.required = true; name.pattern = "[a-z0-9][a-z0-9\\-]{0,30}"; name.placeholder = "e.g. work"; name.title = "a-z, 0-9 and -";
-  if (account) { name.value = account; name.readOnly = true; }
+  if (account !== null) { name.value = account; name.readOnly = true; }
   secret.type = "password"; secret.autocomplete = "off";
   ways.setAttribute("role", "group"); ways.setAttribute("aria-label", "How it signs in");
   let way = ACCOUNT_WAYS[0];
@@ -572,9 +575,10 @@ function accountAdd(m, account = "") {
     secret.required = !!w[3]; secret.placeholder = w[3]; secret.pattern = w[4] || ".*"; secret.value = "";
   };
   for (const w of ACCOUNT_WAYS) { const b = el("button", null, w[1]); b.type = "button"; b.dataset.way = w[0]; b.onclick = () => pick(w); ways.append(b); }
-  const shown = accountForm(account ? `Sign ${account} in on ${m.label}` : `Add a Claude account on ${m.label}`,
-    [...(account ? [] : ["Chats on this pc can then run under it (the model chip). Settings, plugins and skills stay the pc's own."]), ways, about],
-    [...(account ? [] : [["Name", name]]), ["Token", secret]], account ? "Sign in" : "Add", () => (way[0] === "login"
+  const intro = account === null ? ["Chats on this pc can then run under it (the model chip). Settings, plugins and skills stay the pc's own."]
+    : account === "" ? ["Browser signs ~/.claude itself in again (the terminal too). A long-lived token or API key runs this pc's chats and workers on it instead; the terminal keeps its own sign-in. Browser again drops the token or key."] : [];
+  const shown = accountForm(account === "" ? `This pc's own Claude on ${m.label}` : account ? `Sign ${account} in on ${m.label}` : `Add a Claude account on ${m.label}`,
+    [...intro, ways, about], [...(account === null ? [["Name", name]] : []), ["Token", secret]], account === null ? "Add" : "Sign in", () => (way[0] === "login"
       ? machineAction(m, "claude_login", { account: name.value })
       : machineAction(m, way[0] === "token" ? "claude_token" : "claude_key", { account: name.value, [way[0] === "token" ? "token" : "key"]: secret.value.trim() })));
   pick(way);
