@@ -9455,7 +9455,7 @@ async def machine_chat_adopt(request: Request):
     cid, now = secrets.token_hex(6), time.time()
     c = {"id": cid, "agent": agent, "folder": folder, "project": project, "title": f"{tid} (taken over from its worker)", "by": p["by"],
          # the account the worker ran under: its session goes on there (checked again at every turn, chat_account)
-         **({"account": acc} if agent == "claude" and CLAUDE_ACCOUNT.fullmatch(acc := str(b.get("account") or "")) else {}),
+         **({"account": acc} if agent in ACCOUNT_AGENTS and CLAUDE_ACCOUNT.fullmatch(acc := str(b.get("account") or "")) else {}),
          "created": now, "updated": now, "status": "idle", "session": session, "next": 0, "seen": 0, "events": [], "tokens": p["tokens"],
          "worker": key}
     for e in (t.get("events") or [])[-200:] if t.get("started") == p.get("started") else []:

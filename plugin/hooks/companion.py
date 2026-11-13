@@ -1048,8 +1048,8 @@ def agy_main() -> str:
 def agy_windows(name: str, now: float) -> list:
     """One agy account's usage windows: an extra one's from its own token, the pc's own from a registered agy's
     language server, else the cloud."""
-    if name:
-        return agy_rate_read(now, name)
+    if name:  # an API key has no quota to read
+        return [] if (agy_accounts.folder(name) / agy_accounts.KEY).exists() else agy_rate_read(now, name)
     try:
         return agent_hooks.limits.agy_summary(agent_hooks.agy_status("RetrieveUserQuotaSummary"), now) or agy_rate_read(now)
     except LookupError:
@@ -2138,6 +2138,15 @@ def account_busy(name: str) -> list:
     return chat.uses(name) + [w["id"] for w in ws.values() if w.get("agent", "claude") == "claude" and w.get("account") == name and w.get("status") == "running"]
 
 
+def agy_remove(name: str) -> str:
+    """Remove agy account `name` and what this companion kept of it: a new account of that name starts with no
+    usage reading or renewed token of the old one."""
+    said = agy_accounts.remove(name)
+    (STATE / f"agy-rate-{name}.json").unlink(missing_ok=True)
+    _AGY_REFRESH.pop(f"account:{name}", None)
+    return said
+
+
 def agy_busy(name: str) -> list:
     """What runs on agy account `name` now: its chats' ids and its workers' task ids."""
     with LOCK:
@@ -2152,7 +2161,7 @@ def remove_waiting():
             continue
         try:
             chat.end_idle(name, "agy")
-            log("remote", "agy account removed after its chats ended", agy_accounts.remove(name))
+            log("remote", "agy account removed after its chats ended", agy_remove(name))
         except Exception as e:
             log("error", f"agy account {name} could not be removed", f"{type(e).__name__}: {e}"[:300])
             accounts.write(agy_accounts.folder(name) / agy_accounts.INFO, {**accounts.info(agy_accounts.folder(name)), "removing": False, "error": f"Remove failed: {e}"[:300]})
@@ -2301,7 +2310,7 @@ def run_action(a: dict) -> str:
         if agy_busy(name):  # in use: it goes once its chats and workers end (remove_waiting)
             return agy_accounts.remove_later(name)
         chat.end_idle(name, "agy")
-        return agy_accounts.remove(name)
+        return agy_remove(name)
     if act == "trust_hooks":
         return trust(agent)
     if act == "link_folder":

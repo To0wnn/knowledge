@@ -144,12 +144,18 @@ def home(name: str) -> Path:
     """A home of links for `agy -p` (a worker), which takes no --gemini-dir but honours HOME: every entry of the real
     home is a link there, but .gemini, which is the account's folder. Next to the account folder (a dot in its name:
     never an account itself); refreshed at every start.
+    A file at the top that a tool replaced (a write by rename: git config --global, a shell history) is linked again,
+    so the real home's holds; what the worker wrote there is lost.
     shortcut: a file the worker writes new at the top of its home stays in this one, not in the real home."""
     d, h, real = folder(name), ROOT / f"{name}.home", Path.home()
     h.mkdir(parents=True, exist_ok=True)
     for src in real.iterdir():
         dst = h / src.name
-        if src.name != ".gemini" and not (dst.exists() or accounts.is_link(dst)):
+        if src.name == ".gemini":
+            continue
+        if src.is_file() and dst.is_file() and not accounts.is_link(dst):
+            dst.unlink()
+        if not (dst.exists() or accounts.is_link(dst)):
             os.symlink(src, dst)
     g = h / ".gemini"
     if not accounts.is_link(g):
@@ -466,6 +472,13 @@ def self_test():
         finally:
             os.environ["HOME"] = was_home
         h = Path(we["HOME"])
+        (h / ".gitconfig").unlink()
+        (h / ".gitconfig").write_text("stale", encoding="utf-8")  # a tool wrote it by rename: no longer the link
+        os.environ["HOME"] = str(real_home)
+        try:
+            home("thuis")
+        finally:
+            os.environ["HOME"] = was_home
         assert we["DBUS_SESSION_BUS_ADDRESS"] == DBUS_OFF and (h / ".gitconfig").read_text() == "g" \
             and (h / ".gemini").resolve() == folder("thuis").resolve() and "werk.home" not in names() and "thuis.home" not in names(), \
             "a worker's home: the real one's entries, its .gemini the account's"
