@@ -3501,6 +3501,8 @@ def main():
         th =json.loads(raw("GET", "/ui/api/search?q=entry%20timing&project=trade", headers=ck)[2])["notes"]
         assert th and all(h["project"] == "trade" for h in th), th
         assert not json.loads(raw("GET", "/ui/api/search?q=entry%20timing&project=homelab", headers=ck)[2])["notes"]
+        assert json.loads(raw("GET", "/ui/api/search?q=entry%20timing&project=homelab,trade", headers=ck)[2])["notes"] == th  # several picked
+        assert {f["path"].split("/")[0] for f in json.loads(raw("GET", "/ui/api/recent?project=homelab,trade", headers=ck)[2])["files"]} >= {"trade-memory"}
         note = json.loads(raw("GET", "/ui/api/note?path=memory/MEMORY.md", headers=ck)[2])
         assert "Item 1" in note["text"] and note["version"]
         assert raw("GET", "/ui/api/note?path=../../etc/passwd", headers=ck)[0] == 404

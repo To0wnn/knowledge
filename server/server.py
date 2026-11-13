@@ -6012,8 +6012,8 @@ async def ui_history(request: Request):
 
 @server.custom_route("/ui/api/semantic", methods=["GET"])
 async def ui_semantic(request: Request):
-    project = canon(request.query_params.get("project", ""))
-    roots = tuple(r + "/" for r in PROJECTS[project] + ("claude",)) if project in PROJECTS else ()
+    roots = ui_pick_roots(request.query_params.get("project", ""))
+    roots = tuple(r + "/" for r in roots + ("claude",)) if roots else ()
     q = request.query_params.get("q", "").strip()[:500]
     hits = [h for h in await asyncio.to_thread(vec.search, q, roots, 30) if in_scope(h["path"])][:15] if q else []
     # the UI asks this after the exact search, for every pause in typing: a query that found nothing either way is a
@@ -6232,13 +6232,19 @@ def audit_stamp() -> tuple:
         return 0, 0
 
 
+def ui_pick_roots(want: str) -> tuple:
+    """The roots of the web UI's project pick: one project, "all", or several as "a,b" ("," is none)."""
+    names = list(PROJECTS) if want == "all" else [canon(p) for p in want.split(",") if p]
+    return tuple(r for p in names if p in PROJECTS for r in PROJECTS[p])
+
+
 @server.custom_route("/ui/api/recent", methods=["GET"])
 async def ui_recent(request: Request):
     """Newest changed Markdown files of a project: the device when the change came through this server (otherwise
     it was edited natively on the VM), lines added/removed, and the session that changed it (the session log entry
     written after the change that names the file), so you see who changed what and why."""
     want = request.query_params.get("project", "homelab")
-    roots = tuple(r for pr in PROJECTS.values() for r in pr) if want == "all" else PROJECTS.get(want, PROJECTS["homelab"])
+    roots = ui_pick_roots(want) or (() if "," in want else PROJECTS["homelab"])
     key = (roots, tuple(device.get().get("roots") or ()))
     async with _ui_recent_lock:  # tabs asking at once wait for one run instead of each making their own
         stamp = (index.note_gen, *audit_stamp())  # a session log entry counts too, and that is no note change
@@ -6319,8 +6325,8 @@ def search_notes(q: str, roots: tuple, limit: int = 40) -> list[dict]:
 async def ui_search(request: Request):
     q = request.query_params.get("q", "").strip()[:200]
     _ui_gap_last.pop(device.get().get("name", "?"), None)  # typing on: the earlier query was not where they stopped
-    project = request.query_params.get("project", "")
-    roots = PROJECTS[project] + ("claude",) if project in PROJECTS else ()
+    roots = ui_pick_roots(request.query_params.get("project", ""))
+    roots = roots + ("claude",) if roots else ()
     return JSONResponse({"notes": await asyncio.to_thread(search_notes, q, roots) if q else []})
 
 

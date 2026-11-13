@@ -200,6 +200,23 @@ async def desktop(browser, secret: str) -> None:
         await pg.locator("#topics summary").first.click()
         await pg.locator("#topics details[open] .hits button").first.click()
         await pg.wait_for_selector("#side .connected a", timeout=5000)
+    # Several projects: "Several…" in the picker ticks projects, with All, None and Only; the pick shows as its own option.
+    if await pg.evaluate("PROJECTS.length > 1"):
+        keep = await pg.evaluate("project")
+        await pg.select_option("#projects", "\nseveral")
+        dlg = pg.locator("dialog.pick-several")
+        await dlg.get_by_role("button", name="None").click()
+        check(await pg.evaluate("project === ',' && picks.size === 0 && !data.nodes.some(nodeIn)"), "None picks no project and shows no notes")
+        await dlg.get_by_role("button", name="All").click()
+        check(await pg.evaluate("project === ALL && !picks"), "All picks every project")
+        await dlg.locator("li").first.get_by_role("button", name="Only").click()
+        check(await pg.evaluate("project === PROJECTS[0] && !allMode()"), "Only picks that one project, as the picker did")
+        await dlg.locator("li").nth(1).locator("input").check()
+        check(await pg.evaluate("project === PROJECTS.slice(0, 2).join() && allMode() && $('projects').value === project"
+                                " && data.nodes.filter(nodeIn).every((n) => picks.has(n.project) || n.project === 'shared')"),
+              "two ticked: both projects show, as one option in the picker")
+        await dlg.get_by_role("button", name="Done").click()
+        await pg.evaluate("(p) => switchProject(p)", keep)
     def nav(v):
         return f'#sidebar [data-nav="{v}"]' if shell else f'[data-tab="{v}"]'
     await pg.click(nav("changes"))
@@ -1395,11 +1412,11 @@ async def board(browser, devices, secret: str) -> None:
     fr = await pg.evaluate("JSON.stringify([bdProjects([{project: 'b'}, {project: 'a'}], ['a'], true), bdProjects([], [], true)])")
     check(fr == '[[{"project":"","n":2,"shut":false}],[]]', f"Grid: together is one frame, nothing folded {fr}")
     await pg.wait_for_function("ck.summaryAt > 0", timeout=15000)
-    order = await pg.evaluate("""(() => { const keep = [ck.chats, ck.board, agentProject]; agentProject = '';
+    order = await pg.evaluate("""(() => { const keep = [ck.chats, ck.board, agentProject, picks]; agentProject = ''; picks = null;
       ck.chats = [{id: 'run', machine: 'x', status: 'running', updated: 9, raised: 1}, {id: 'done', machine: 'x', status: 'idle', updated: 8, raised: 3},
         {id: 'unread', machine: 'x', status: 'idle', updated: 7, raised: 2}, {id: 'gone', machine: 'x', status: 'idle', closed: true, updated: 6, raised: 4}];
       ck.board = [{col: 'needs', kind: 'chat', machine: 'x', id: 'unread'}];
-      const out = bdChats().map((x) => x.c.id).join(); [ck.chats, ck.board, agentProject] = keep; return out; })()""")
+      const out = bdChats().map((x) => x.c.id).join(); [ck.chats, ck.board, agentProject, picks] = keep; return out; })()""")
     check(order == "done,unread,run", f"Grid: cards keep their place by when they last finished, whatever their state now ({order})")
     shows = "$('bd') && !$('bd').hidden && getComputedStyle($('ck-chats')).display === 'none' && getComputedStyle($('bd-world')).display === 'grid'"
     await pg.wait_for_function(shows, timeout=5000)
@@ -1414,7 +1431,7 @@ async def board(browser, devices, secret: str) -> None:
     await pg.click("#bd .bd-card.draft .ck-x:not(.bd-only)")
     await pg.wait_for_function("!document.querySelector('#bd .bd-card.draft') && !ck.cards.has('draft/new') && location.hash === '#/chats'", timeout=5000)
     check(True, "Grid: the draft card's x drops it, the grid stays")
-    kept = await pg.evaluate("""(() => { const keep = [ck.chats, ck.board, agentProject, bd.held]; agentProject = ''; ck.board = []; bd.held = new Map();
+    kept = await pg.evaluate("""(() => { const keep = [ck.chats, ck.board, agentProject, bd.held, picks]; agentProject = ''; picks = null; ck.board = []; bd.held = new Map();
       const chat = (id, raised) => ({ id, machine: 'x', label: 'pc', folder: '/f', project: 'p', agent: 'claude', status: 'running', raised });
       ck.chats = [chat('a', 2), chat('b', 1)]; bdRender();
       const card = ck.cards.get('x/b'); card.input.disabled = false; card.input.value = 'half typed'; card.input.focus(); card.input.setSelectionRange(4, 4);
@@ -1429,7 +1446,7 @@ async def board(browser, devices, secret: str) -> None:
       ck.chats = [chat('a', 2), chat('b', 3)]; bd.held.delete('x/c'); bdRender();
       card.input.focus(); pill.click(); card.input.focus(); // the pill takes the focus; the card must survive its own move
       const out = [first(), document.activeElement === card.input, card.input.selectionStart, card.log.scrollTop === top, top > 0, pill.hidden];
-      [ck.chats, ck.board, agentProject, bd.held] = keep; ckDrop('x/a'); ckDrop('x/b'); ckDrop('x/c'); bdRender(); return [held, below, out]; })()""")
+      [ck.chats, ck.board, agentProject, bd.held, picks] = keep; ckDrop('x/a'); ckDrop('x/b'); ckDrop('x/c'); bdRender(); return [held, below, out]; })()""")
     check(kept == [[False, False, "↑ 1 updated", "↑ 1 needs you", True], [True, "↑ 2 updated"], [True, True, 4, True, True, True]],
           f"Grid: a finished chat holds until the pill, a new one comes in below; then it moves up with focus, cursor and scroll kept {kept}")
     for old in ("grid", "board"):
@@ -2210,7 +2227,7 @@ async def chat_tabs(browser, secret: str) -> None:
     ctx, pg, errors = await page(browser, secret, "/ui#/chats", viewport={"width": 1440, "height": 900})
     await ctx.route("**/ui/api/chat?*", lambda r: r.abort())
     await pg.wait_for_function("ck.summaryAt > 0 && ck.ready", timeout=15000)
-    await pg.evaluate("agentProject = ''; bdRender()")  # live: the open chats need not be in the default project
+    await pg.evaluate("agentProject = ''; picks = null; bdRender()")  # live: the open chats need not be in the default project
     await pg.wait_for_selector("#bd .bd-card .ck-card", timeout=15000)
     card = pg.locator("#bd .bd-card").first
     await pg.mouse.move(0, 0)
@@ -2346,7 +2363,7 @@ async def grid_groups(browser, secret: str) -> None:
     if await pg.evaluate("typeof bdProjects") != "function":
         await ctx.close()
         return
-    await pg.evaluate("agentProject = ''; bd.held = new Map(); ck.summaryAt = 0; ckSummary()")  # live: the real chats came first
+    await pg.evaluate("agentProject = ''; picks = null; bd.held = new Map(); ck.summaryAt = 0; ckSummary()")  # live: the real chats came first
     heads = "[...document.querySelectorAll('#bd .bd-frame-title strong')].map((s) => s.textContent).join()"
     await pg.wait_for_function(f"{heads} !== '' && document.querySelectorAll('#bd .bd-card').length === 4", timeout=5000)
     check(await pg.evaluate(heads) == "ccc,bbb,aaa", f"Grid: the project last active is on top ({await pg.evaluate(heads)})")
@@ -2397,7 +2414,7 @@ async def grid_groups(browser, secret: str) -> None:
     other.on("pageerror", lambda e: other_errors.append(str(e)))
     await other.goto(f"{URL}/ui#/chats")
     await other.wait_for_function("typeof bdRender === 'function' && ck.ready", timeout=15000)
-    await other.evaluate("agentProject = ''; ck.summaryAt = 0; ckSummary()")
+    await other.evaluate("agentProject = ''; picks = null; ck.summaryAt = 0; ckSummary()")
     await other.wait_for_function(f"{cards} === '1,2,3,4'", timeout=5000)
     check(await other.evaluate("bd.part") == 0, "Parts: a new window starts on all, the other window's part is its own")
     await other.evaluate("$('bd-stage').focus()")

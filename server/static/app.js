@@ -83,14 +83,16 @@ let data = { nodes: [], links: [] };
 let byId = new Map(), neighbors = new Map(), slugToId = new Map(), clusterColor = new Map();
 let selected = null, hover = null, focusSet = new Set();
 let machinesCache = []; // the last /ui/api/machines rows (declared early for loadTasks/loadMachines)
-let project = navProject.get();
+let project = navProject.get(), picks = navPicks(project); // picks: the picked projects, null = all of them
 let labelMin = 0, current = null, editing = false, Graph, mapOn = false;
 
 // "all": every project on one map, each project an island; otherwise one project and its topics.
-const ALL = "all", allMode = () => project === ALL;
-const inProject = (p) => allMode() || p === project || p === "shared";
+// Several picked projects (or none) show as the All map does, with only those projects.
+const ALL = "all", allMode = () => picks?.size !== 1, picked = (p) => !picks || picks.has(p);
+const pickName = () => !picks ? "all projects" : [...picks].map(shown).join(", ") || "no project";
+const inProject = (p) => picked(p) || p === "shared";
 // A shared note (skill) shows only in the projects that link to it.
-const nodeIn = (n) => allMode() || n.project === project || (n.project === "shared" && (!n.projects || n.projects.includes(project)));
+const nodeIn = (n) => picked(n.project) || (n.project === "shared" && (!picks || !n.projects || n.projects.some(picked)));
 // What colours a note and makes its island: its project on the All map, its topic otherwise.
 const groupOf = (n) => (allMode() ? n.project : n.cluster);
 const lintProject = (item) => ROOT_PROJECT[item.split(/[/:]/)[0]] || "homelab"; // homelab memory items carry no root prefix
@@ -781,28 +783,53 @@ $("map-replay").onclick = () => (replay ? stopReplay() : startReplay());
 
 // ---------------------------------------------------------------- side panel controls
 // The project of the knowledge views: a picker in the sidebar and in the phone's More sheet, with its note count.
+// "Several…" opens a tick per project, with All, None and Only; a pick of several shows as one more option.
 function renderProjects() {
+  const several = picks && picks.size !== 1 ? [project] : [];
   for (const box of document.querySelectorAll(".project-pick")) {
-    box.replaceChildren(...[...PROJECTS, ALL].map((p) => {
-      const o = el("option", null, `${p === ALL ? "All projects" : shown(p)} · ${p === ALL ? data.nodes.length : data.nodes.filter((x) => x.project === p).length}`);
+    box.replaceChildren(...[...PROJECTS, ALL, ...several, PICK_SEVERAL].map((p) => {
+      const n = data.nodes.filter((x) => p === ALL || (p === project ? picked(x.project) : x.project === p)).length;
+      const o = el("option", null, p === PICK_SEVERAL ? "Several…" : `${p === ALL ? "All projects" : several[0] === p ? pickName() : shown(p)} · ${n}`);
       o.value = p; return o;
     }));
     box.value = project;
-    box.onchange = () => switchProject(box.value);
+    box.onchange = () => { if (box.value === PICK_SEVERAL) { box.value = project; pickSeveral(); } else switchProject(box.value); };
   }
+}
+const PICK_SEVERAL = "\nseveral"; // no project name has a newline
+// A list of projects as the stored pick: all of them is ALL, one its name, several "a,b", none ",".
+const pickValue = (ps) => ps.length === PROJECTS.length ? ALL : ps.length === 1 ? ps[0] : ps.join(",") || ",";
+function pickSeveral() {
+  const d = el("dialog", "pick-several"), list = el("ul", "pick-list"), top = el("div", "actions"), bottom = el("div", "actions");
+  d.setAttribute("aria-label", "Projects");
+  const set = (ps) => { switchProject(pickValue(PROJECTS.filter((p) => ps.includes(p)))); paint(); };
+  const paint = () => list.replaceChildren(...PROJECTS.map((p) => {
+    const li = el("li"), lab = el("label"), box = el("input"), only = el("button", "btn small quiet", "Only");
+    box.type = "checkbox"; box.checked = picked(p);
+    box.onchange = () => set(PROJECTS.filter((q) => (q === p ? box.checked : picked(q))));
+    only.type = "button"; only.title = `Only ${shown(p)}`; only.onclick = () => set([p]);
+    lab.append(box, ` ${shown(p)} · ${data.nodes.filter((x) => x.project === p).length}`); li.append(lab, only); return li;
+  }));
+  const all = el("button", "btn small", "All"), none = el("button", "btn small", "None"), done = el("button", "btn primary", "Done");
+  all.type = none.type = done.type = "button";
+  all.onclick = () => set(PROJECTS); none.onclick = () => set([]); done.onclick = () => d.close();
+  d.onclose = () => d.remove();
+  paint(); top.append(all, none); bottom.append(done);
+  d.append(el("h2", null, "Projects"), top, list, bottom);
+  document.body.append(d); d.showModal();
 }
 
 function switchProject(p, refit = true) {
   releaseFocus({ instant: true }); stopReplay();
-  if (p === project || (p !== ALL && !PROJECTS.includes(p))) return;
-  project = p; navProject.set(p);
-  setAgentProject(p === ALL ? "" : p); // one project picker for every view
+  if (p === project || (p !== ALL && ![...navPicks(p)].every((x) => PROJECTS.includes(x)))) return;
+  project = p; picks = navPicks(p); navProject.set(p);
+  setAgentProject(allMode() ? "" : p); // one project picker for every view
   $("new-memo").hidden = !me.writable.includes(p);
   $("add-menu").hidden = $("new-memo").hidden && $("ingest-open").hidden;
   selected = null; setFocus(null);
   indexGraph(); renderProjects(); renderTopics(); applyView(refit);
   // a note of the old project would stay in the URL, so a refresh would jump back to it: show the new project's home
-  if (current && p !== ALL && projectOf(current.path) !== p) deselect();
+  if (current && !allMode() && projectOf(current.path) !== p) deselect();
   else if (!current) homeView();
   if (!$("results").hidden) runSearch();
   loadLint(!$("tab-lint").hidden);
@@ -926,12 +953,12 @@ let homeNote = null;
 async function homeView() {
   const p = project, path = `${MEMORY_ROOT[p]}/MEMORY.md`;
   let note = { text: "" }; // All: no one index, the cards come from the projects themselves
-  if (p !== ALL) try { note = await api(`/ui/api/note?path=${encodeURIComponent(path)}`); } catch { return; } // no index yet
+  if (!allMode()) try { note = await api(`/ui/api/note?path=${encodeURIComponent(path)}`); } catch { return; } // no index yet
   if (current || editing || p !== project) return; // the user opened something or switched meanwhile
   homeNote = note;
   if (!data.nodes.length) return; // the map data is still loading: its arrival draws the home view
   const body = splitFront(note.text).body, groups = topicGroups();
-  if (p !== ALL && (!/^## /m.test(body) || !groups.length)) { // no headings yet: the index as it is
+  if (!allMode() && (!/^## /m.test(body) || !groups.length)) { // no headings yet: the index as it is
     const md = el("div", "md"); md.innerHTML = renderMd(body);
     document.body.classList.remove("home"); // this overview keeps its right column
     homeRecent($("side"));
@@ -942,7 +969,7 @@ async function homeView() {
   const hooks = new Map([...body.matchAll(/^- \[[^\]]+\]\(([^)]+\.md)\)\s*[—–-]\s*(.+)$/gm)].map((m) => [`${MEMORY_ROOT[p]}/${m[1]}`, m[2]]));
   const notes = groups.reduce((a, [, ns]) => a + ns.length, 0);
   const head = el("header", "home-head");
-  head.append(el("h2", null, p === ALL ? "All projects" : p), el("p", "muted", p === ALL
+  head.append(el("h2", null, allMode() ? pickName().replace(/^./, (c) => c.toUpperCase()) : p), el("p", "muted", allMode()
     ? `${notes} notes in ${groups.length} projects. The map (M) shows how they link to each other.`
     : `${notes} notes in ${groups.length} topics. Pick a note, search with /, or open the map with M.`));
   const grid = el("div", "home-grid");
@@ -1486,7 +1513,7 @@ async function loadRecent(look = false) {
     b.onclick = async () => { if (await openNote(f.path) && f.version) { setMap(false); showHistory(f.version); } };
     li.append(b); list.append(li);
   }
-  if (!res.files.length) box.append(emptyState(`No changes in ${p === ALL ? "any project" : shown(p)} yet: every edit to a memo or doc shows here, newest first.`));
+  if (!res.files.length) box.append(emptyState(`No changes in ${p === ALL ? "any project" : pickName()} yet: every edit to a memo or doc shows here, newest first.`));
   store.set(key, String(Math.max(seen, ...res.files.map((f) => f.mtime))));
   loadTrash(p).catch((e) => box.append(el("p", "error", `Deleted: ${e.message}`)));
 }
@@ -1496,7 +1523,7 @@ let trashOpen = false;
 async function loadTrash(p) {
   const res = await api("/ui/api/trash");
   if (p !== project || $("tab-changes").hidden) return;
-  const items = res.items.filter((i) => allMode() || i.project === p), card = el("details", "card trash");
+  const items = res.items.filter((i) => picked(i.project)), card = el("details", "card trash");
   card.id = "trash"; card.hidden = !items.length; card.open = trashOpen; card.ontoggle = () => { trashOpen = card.open; };
   const sum = el("summary", "sub", "Deleted"); sum.append(el("span", "badge", String(items.length)));
   const list = el("ol", "hits");
@@ -1530,7 +1557,7 @@ async function loadLint(render = true) {
   const res = await api("/ui/api/lint?v=2"), full = res.report || res, hints = res.hints || {};
   // checks in a group (token usage) are context, not problems: folded at the end and left out of the badge
   const grouped = new Map((res.groups || []).flatMap((g) => g.checks.map((c) => [c, g])));
-  const report = Object.fromEntries(Object.entries(full).map(([k, v]) => [k, v.filter((i) => allMode() || lintProject(i) === project)]));
+  const report = Object.fromEntries(Object.entries(full).map(([k, v]) => [k, v.filter((i) => picked(lintProject(i)))]));
   const count = (r) => Object.entries(r).reduce((a, [c, v]) => a + (grouped.has(c) ? 0 : v.length), 0);
   const here = count(report), all = count(full);
   // Badge and tab show this project's findings; the tab points to the rest so findings elsewhere are not missed.
@@ -1559,7 +1586,7 @@ async function loadLint(render = true) {
     folds.get(g.id).append(card);
   }
   box.append(...folds.values());
-  if (!here) box.append(el("p", "empty ok", `All clear: no findings in ${project === ALL ? "any project" : shown(project)}.`));
+  if (!here) box.append(el("p", "empty ok", `All clear: no findings in ${project === ALL ? "any project" : pickName()}.`));
   if (all > here) {
     const b = el("button", "btn small", `${all - here} in other projects`); b.onclick = () => switchProject(ALL);
     box.append(b);
@@ -1569,23 +1596,23 @@ async function loadLint(render = true) {
 // date, with where each runs and a "Start on <pc>" per pc that may take it; results handed back. Cancel turns an open
 // line into a result for its requester; Remove takes a read result away (history keeps both). The badge counts the open lines
 // of the project picked in the sidebar, the same number as the list's Open heading.
-let agentProject = project === ALL ? "" : project; // the Agents views' project: the sidebar's, "" = all (shell.js setAgentProject)
+let agentProject = allMode() ? "" : project; // the Agents views' project: the sidebar's, "" = all (shell.js setAgentProject)
 async function loadTasks(render = true) {
   const res = await api(render ? "/ui/api/tasks?hosts=1" : "/ui/api/tasks"), all = res.tasks.filter((t) => !t.done);
   // the badge follows the project picker, as the list does (the Health badge too); its title has both counts
-  const inProject = res.tasks.filter((t) => !agentProject || t.project === agentProject), spill = !!agentProject && !inProject.length && res.tasks.length > 0; // nothing here: show the work elsewhere
-  const here = all.filter((t) => !agentProject || t.project === agentProject), counted = spill ? all : here;
+  const inProject = res.tasks.filter((t) => picked(t.project)), spill = !!picks && !inProject.length && res.tasks.length > 0; // nothing here: show the work elsewhere
+  const here = all.filter((t) => picked(t.project)), counted = spill ? all : here;
   $("tasks-count").textContent = counted.length || "";
   $("tasks-count").className = counted.some((t) => t.overdue) ? "badge warn" : "badge";
-  $("tasks-count").title = agentProject ? `${here.length} open in ${agentProject}, ${all.length} in all projects` : `${all.length} open in all projects`;
+  $("tasks-count").title = picks ? `${here.length} open in ${pickName()}, ${all.length} in all projects` : `${all.length} open in all projects`;
   const tasks = spill ? res.tasks : inProject, open = tasks.filter((t) => !t.done), back = tasks.filter((t) => t.done);
   if (!render) return;
   const box = $("tasks"); box.replaceChildren();
   const elsewhere = all.length - open.length; // the badge counts every project: say what the picker hides
   const showAll = () => actionButton(`${elsewhere} in other projects: show`, () => switchProject(ALL), "btn small ck-elsewhere");
   // the state first: nothing here (and how much elsewhere), or the lists with a pointer to the other projects
-  if (!tasks.length) box.append(emptyState(`No tasks${agentProject ? ` in ${shown(agentProject)}` : ""}: when an agent hands work to another in a memo, it shows here.`));
-  else if (spill) box.append(emptyState(`No tasks in ${shown(agentProject)}. In your other projects:`));
+  if (!tasks.length) box.append(emptyState(`No tasks${picks ? ` in ${pickName()}` : ""}: when an agent hands work to another in a memo, it shows here.`));
+  else if (spill) box.append(emptyState(`No tasks in ${pickName()}. In your other projects:`));
   else if (elsewhere) box.append(showAll());
   // the workers of these tasks, from the Machines list: progress and Stop/Restart live with the task, not the pc
   const machines = await api("/ui/api/machines").then((r) => (Array.isArray(r) ? r : r.machines || [])).catch(() => []);
@@ -1840,8 +1867,11 @@ async function loadMe() {
   me = await api("/ui/api/me");
   PROJECTS = me.projects;
   for (const p of PROJECTS) if (!MEMORY_ROOT[p]) { MEMORY_ROOT[p] = `${p}-memory`; ROOT_PROJECT[p] = p; ROOT_PROJECT[`${p}-memory`] = p; }
-  if (!PROJECTS.includes(project) && project !== ALL) project = PROJECTS[0];
-  agentProject = project === ALL ? "" : project;
+  if (picks) { // a project no longer yours drops out of the pick; when it was the only one, the first project
+    const ok = PROJECTS.filter((p) => picks.has(p));
+    project = ok.length || project.includes(",") ? pickValue(ok) : PROJECTS[0]; picks = navPicks(project);
+  }
+  agentProject = allMode() ? "" : project;
   navMe(me);
   if (!me.admin) $("ingest-open").hidden = true;
   $("new-memo").hidden = !me.writable.includes(project);

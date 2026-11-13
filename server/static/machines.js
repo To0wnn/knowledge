@@ -788,7 +788,7 @@ function filesRoots() {
     .sort((a, b) => (b.id === machinesHere) - (a.id === machinesHere) || b.own - a.own || a.label.localeCompare(b.label));
   const parts = [el("p", "muted fm-lede", "The folders linked on your pcs, and those of a project someone shared with you on theirs. git's own files, .env files and keys stay hidden.")];
   for (const m of pcs) {
-    const folders = (m.companion.folders?.linked || []).filter((f) => usable(m, f) && (allMode() || f.project === project));
+    const folders = (m.companion.folders?.linked || []).filter((f) => usable(m, f) && picked(f.project));
     if (!folders.length) continue;
     const sec = el("section", "fm-group"), h = el("h2", "mx-h", m.label);
     if (m.id === machinesHere) h.append(el("span", "chip", "this pc"));

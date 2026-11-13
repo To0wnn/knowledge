@@ -14,6 +14,8 @@ const navProject = {
   get() { try { const p = sessionStorage.getItem("kn_project") || localStorage.getItem("kn_project") || "homelab"; sessionStorage.setItem("kn_project", p); return p; } catch { return "homelab"; } },
   set(p) { try { sessionStorage.setItem("kn_project", p); localStorage.setItem("kn_project", p); } catch { /* blocked: this window still shows it */ } },
 };
+// The stored pick as a set of projects: null = all, "a" one, "a,b" several, "," none.
+const navPicks = (v) => (v === "all" ? null : new Set(v.split(",").filter(Boolean)));
 
 // Theme: Auto (the system's), Light or Dark; theme.js applies the stored pick before the page paints. The sidebar has
 // it as an icon, the More sheet as a labelled button. The app listens for "kn-theme" to recolour the map.
@@ -176,9 +178,10 @@ function navMe(me) {
   }
   if (me.projects && me.projects.length) {
     for (const s of document.querySelectorAll(".project-pick")) {
-      s.replaceChildren(...[...me.projects, "all"].map((p) => {
+      const cur = navProject.get(), picks = navPicks(cur), several = picks && picks.size !== 1 ? [cur] : []; // picked in the app
+      s.replaceChildren(...[...me.projects, "all", ...several].map((p) => {
         const opt = document.createElement("option");
-        opt.value = p; opt.textContent = p === "all" ? "All projects" : me.labels?.[p] || p;
+        opt.value = p; opt.textContent = p === "all" ? "All projects" : p === several[0] ? [...picks].map((q) => me.labels?.[q] || q).join(", ") || "No project" : me.labels?.[p] || p;
         return opt;
       }));
       s.value = navProject.get();
@@ -220,17 +223,17 @@ if (navPage) {
   }).catch(() => {});
   get("/ui/api/tasks").then((ts) => {
     // the picked project's open lines, as the app's Tasks badge ("all" = every project)
-    const p = navProject.get(), el = navEl("tasks-count"), openAll = (ts.tasks || []).filter((t) => !t.done), inProject = (ts.tasks || []).some((t) => p === "all" || t.project === p), open = inProject ? openAll.filter((t) => p === "all" || t.project === p) : openAll; // nothing here: the list shows the work elsewhere
+    const ps = navPicks(navProject.get()), mine = (t) => !ps || ps.has(t.project), el = navEl("tasks-count"), openAll = (ts.tasks || []).filter((t) => !t.done), inProject = (ts.tasks || []).some(mine), open = inProject ? openAll.filter(mine) : openAll; // nothing here: the list shows the work elsewhere
     if (el) { el.textContent = open.length || ""; el.className = open.some((t) => t.overdue) ? "badge warn" : "badge"; }
   }).catch(() => {});
   meReady.then(() => get("/ui/api/lint?v=2")).then((res) => { // this project's findings, as the app's Health badge (project from the app's picker)
-    const el = navEl("lint-count"), project = navProject.get(), full = res.report || res;
+    const el = navEl("lint-count"), ps = navPicks(navProject.get()), full = res.report || res;
     const grouped = new Set((res.groups || []).flatMap((g) => g.checks));
     const of = (item) => { // as app.js lintProject: a project's root or its -memory root, claude/ shared, the rest homelab
       const r = item.split(/[/:]/)[0], p = r.replace(/-memory$/, "");
       return r === "claude" ? "shared" : (navProjects || []).includes(p) ? p : "homelab";
     };
-    const n = Object.entries(full).reduce((a, [c, v]) => a + (grouped.has(c) ? 0 : v.filter((i) => project === "all" || of(i) === project).length), 0);
+    const n = Object.entries(full).reduce((a, [c, v]) => a + (grouped.has(c) ? 0 : v.filter((i) => !ps || ps.has(of(i))).length), 0);
     if (el) el.textContent = n || "";
   }).catch(() => {});
 }

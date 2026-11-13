@@ -12,7 +12,7 @@ const ckKey = (c) => `${c.machine}/${c.id}`;
 const ckBusy = (s) => s === "running" || s === "queued";
 const FORCE_BUSY = "This chat is working: force archive stops its turn, drops its queued messages and skips the wrap-up. Go on?";
 const ckShort = (path) => (path || "").split(/[\\/]/).filter(Boolean).pop() || path;
-const ckScope = (x) => !agentProject || x.project === agentProject; // the header's project filter
+const ckScope = (x) => (agentProject ? x.project === agentProject : picked(x.project)); // the header's project filter
 
 // Polling of the pcs, chats and board runs while an Agents view shows; the router turns it on and off.
 function ckRun(on) { clearTimeout(ck.timer); if (on) { ck.summaryAt = 0; ckTick(); } }
@@ -1355,11 +1355,11 @@ document.addEventListener("keydown", (e) => { if (e.key === "Escape" && !documen
 const CK_DRAFT = { machine: "draft", id: "new", draft: true, agent: "", title: "", folder: "", label: "", status: "idle" };
 function ckDraftPcs() { // own and shared pcs online with a companion that reports models and has a linked folder in the project
   return [...ck.machines, ...(ck.shared || [])].filter((m) => m.online && (m.companion?.agents || []).length
-    && ckLinked(m).some((f) => !agentProject || f.project === agentProject));
+    && ckLinked(m).some((f) => picked(f.project)));
 }
 function ckDraftFolders(card) { // [{machine, label, path, project}] that can run the chosen model
   const x = ckModelOf(card), pcs = ckDraftPcs().filter((m) => x ? x.pcs.includes(m.id) : (m.companion.agents || []).includes(card.pick?.agent));
-  return pcs.flatMap((m) => ckLinked(m).filter((f) => !agentProject || f.project === agentProject)
+  return pcs.flatMap((m) => ckLinked(m).filter((f) => picked(f.project))
     .map((f) => ({ machine: m.id, label: m.own ? m.label : `${m.label} (shared)`, path: f.path, project: f.project })));
 }
 function ckDraftFolder(card) {
