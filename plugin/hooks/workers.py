@@ -86,7 +86,8 @@ def worktree(folder: str, tid: str, project: str = "", prefix: str = "task", mak
     task/<base ID> when the project folder is in a git repository (an existing one is reused: a hand-over goes on
     there), else {cwd: folder}. make=False only looks: {} when that worktree does not exist (a diff, the git pill)."""
     top = git(folder, "rev-parse", "--show-toplevel")
-    if top.returncode or not shutil.which("git"):
+    # a repository without a commit yet has no HEAD to branch from: work in the folder itself, as outside git
+    if top.returncode or not shutil.which("git") or git(folder, "rev-parse", "-q", "--verify", "HEAD").returncode:
         return {"cwd": folder}
     repo, bid = Path(top.stdout.strip()), base_id(tid)
     # the repository's and project's hash in the name: two checkouts called "app" with a task KN-1 each never share a
@@ -759,6 +760,8 @@ def self_test():
         plain = Path(t) / "plain"
         plain.mkdir()
         assert worktree(str(plain), "KN-2") == {"cwd": str(plain)}
+        git(plain, "init", "-q", check=True)
+        assert worktree(str(plain), "KN-2") == {"cwd": str(plain)}, "a repository without a commit works in the folder itself"
         assert not Path(outer).exists(), "a calling git hook's index is never touched"
         del os.environ["GIT_INDEX_FILE"]
     assert base_id("KN-3-cont-cont") == "KN-3" and base_id("KN-3-fix") == "KN-3" and base_id("KN-3-cont-FIX") == "KN-3"

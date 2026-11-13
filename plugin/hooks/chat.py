@@ -1962,9 +1962,9 @@ def _start_live(item: dict, post, log, linked, yolo):
                     post({"chat": cid, "events": [{"kind": "info", "text": f"Works on branch {where['branch']} in its own worktree {where['worktree']}. "
                                                    "Commit there. Close the chat when it is done: it gets a Review card with Merge, and its worktree goes once nothing is left to merge."}]})
                 elif not where.get("worktree") and not item.get("session") and cid not in LIVE:
-                    post({"chat": cid, "events": [{"kind": "info", "text": "The folder is not in a git repository: it works in the folder itself."}]})
+                    post({"chat": cid, "events": [{"kind": "info", "text": "The folder is not in a git repository, or it has no commit yet: it works in the folder itself."}]})
                 if item.get("guest") and not where.get("worktree") and not item.get("taken"):  # a guest never works in the owner's own folder
-                    raise RuntimeError("a shared chat runs only in a worktree of its own, and this folder is not in a git repository")
+                    raise RuntimeError("a shared chat runs only in a worktree of its own, and this folder is not in a git repository with a commit")
                 item = {**item, "folder": where["cwd"]}
                 own = where.get("worktree") and where["cwd"]
             lv = LIVE.get(cid)
