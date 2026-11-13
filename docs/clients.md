@@ -144,11 +144,17 @@ broad job over subagents, have every finding refuted by a fresh verifier, report
   apply_patch, agy's file tools), where `token.py push-secrets` left the hash file (`secret set` and `secret rm` run it themselves; a value
   added in the Vaultwarden web UI needs a manual push). Only new text counts, so removing a secret is allowed.
 - **Project folder guard:** the same hook refuses a session the companion started (a web UI chat or a worker,
-  YOLO included) an edit outside its project folder: its git checkout, for a linked worktree the main checkout too, the
-  agents' own folders (`~/.claude`, `~/.codex`, `~/.gemini`, the knowledge home) and the temp folder. Elsewhere only
-  where the owner explicitly named the folder or file in that chat (or the task's text): the companion keeps their words
-  in `companion/asks/` (`KNOWLEDGE_ASKS`); a drive root, the home folder or above never count. A person's own
-  terminal session is not limited. Only the edit tools are checked; a shell command can still write elsewhere.
+  YOLO included) an edit (Edit, Write, MultiEdit, NotebookEdit, a Codex patch, agy's edits) outside its project folder:
+  its git checkout, for a linked worktree the main checkout too (not for a guest's chat), the agents' own working
+  folders (`AGENT_DIRS`: Claude's plans, projects, todos and tasks, Codex's memories, agy's brain, scratch and knowledge;
+  never their settings, hooks, plugins or skills, nor the knowledge home with the asks files and the companion's state,
+  which would let a session switch the guard off) and the temp folder. Paths are resolved (`realpath`), so a symlink
+  or junction in the project counts where it points. Elsewhere only where the pc's owner explicitly named the folder
+  or file in that chat: the server sends only their own words along (`asks` in the work item; never a guest's or a
+  joined person's, a hand-over transcript or a task's text, which an agent may write), and the companion keeps them in
+  `companion/asks/` (`KNOWLEDGE_ASKS`); the name must stand whole (`/opt/app` inside `/mnt/backup/opt/app` does not
+  count), and a drive root, the home folder or above never count. A person's own terminal session is not limited.
+  Only the edit tools are checked; a shell command can still write elsewhere.
 - **Scripted runs:** set `KNOWLEDGE_NO_SESSION_LOG=1` for a measurement or a one-off reader: every agent's hook then skips
   the session log, which is for sessions someone looks back on.
 - **Token use:** the session log also sends the tokens of each logged part (uncached input, cache writes, cache reads,

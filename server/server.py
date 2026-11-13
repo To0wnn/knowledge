@@ -3545,6 +3545,11 @@ def canon(name: str) -> str:
     return name
 
 
+def person_names() -> set:
+    """Every person's user name: a rename rewrites keys named like the project, and people key shares and accounts."""
+    return {*read_json(USERS_FILE, {}), *ADMINS, *(str(t.get("owner") or "") for t in read_json(TOKENS_FILE, {}).values() if isinstance(t, dict))} - {""}
+
+
 def check_new_name(name: str, renaming: str = ""):
     if not PROJECT_NAME.match(name):
         raise ToolError("project name: 2-24 lowercase letters or digits, starting with a letter")
@@ -3552,6 +3557,8 @@ def check_new_name(name: str, renaming: str = ""):
         raise ToolError("'shared' is taken: the UI uses it for the shared skills")
     if name in kb_graph.ALL_BUILTIN or name in ROOTS or f"{name}-memory" in ROOTS:  # built-ins also when off (folder rules)
         raise ToolError(f"{name} already exists")
+    if name in person_names():
+        raise ToolError(f"{name} is a person's name: pick another (a rename would also rename their shares and accounts)")
     if name in read_json(ALIASES_FILE, {}) and canon(name) != renaming:  # its own old name may come back
         raise ToolError(f"{name} was renamed to {read_json(ALIASES_FILE, {})[name]}; its old links still point there")
 
@@ -3573,6 +3580,8 @@ def rename_project(old: str, new: str, memo_roots: set | None = None) -> dict:
     Runs under _admin_lock (one admin change at a time)."""
     if old not in PROJECTS or old in BUILTIN_PROJECTS:
         raise ToolError(f"{old}: only a project made in the web UI can be renamed")
+    if old in person_names():  # its rename would take that person's shares and main accounts along: by hand
+        raise ToolError(f"{old} is also a person's name: renaming it here would rename their shares and accounts too")
     check_new_name(new, renaming=old)
     roots = {old: new, f"{old}-memory": f"{new}-memory"}
     flat = lambda n: next((roots[r] + n[len(r):] for r in roots if n.startswith(r + "__")), None)  # noqa: E731
@@ -7142,8 +7151,9 @@ async def ui_files(request: Request):
 
 # A page's preview, drawn as a browser would: the page's own CSS, scripts, images and fonts by relative path are fetched
 # from the pc and put into the page as data: URLs, since the sandboxed frame has an opaque origin and sends no sign-in
-# cookie (nor Authentik's), so it could not load them from this site. Its scripts run there with no network at all and
-# no reach into this site, so a page from a pc cannot phone home. shortcut: what a script loads itself (fetch, an ES
+# cookie (nor Authentik's), so it could not load them from this site. Its scripts run there with no fetch and
+# no reach into this site; it can still navigate itself away with what it holds, so only the page's own folder's files
+# are put in (site_under), never another linked project's. shortcut: what a script loads itself (fetch, an ES
 # module's imports) and srcset stay unloaded; a server-side bundler would be the upgrade if pages need that.
 FILES_PREVIEW_CSP = ("sandbox allow-scripts allow-modals; default-src 'none'; script-src 'unsafe-inline' data:; "
                      "style-src 'unsafe-inline' data:; img-src data: blob:; font-src data:; media-src data: blob:; "
@@ -7163,6 +7173,14 @@ def site_path(base: str, ref: str) -> str:
         return ""
     win = re.match(r"[A-Za-z]:[\\/]|\\\\", base)
     return ntpath.normpath(ntpath.join(base, ref)) if win else posixpath.normpath(posixpath.join(base, ref))
+
+
+def site_under(path: str, folder: str) -> bool:
+    """`path` lies in `folder`: a page pulls only its own folder's files, never another linked project's (../../b)."""
+    win = re.match(r"[A-Za-z]:[\\/]|\\\\", folder)
+    p, f = (ntpath.normcase(x) for x in (path, folder)) if win else (path, folder)
+    sep = "\\" if win else "/"
+    return p.startswith(f.rstrip(sep) + sep)
 
 
 def site_dir(path: str) -> str:
@@ -7199,7 +7217,7 @@ async def site_inline(mid: str, path: str, page: str) -> str:
     got: dict = {}
 
     async def pull(paths):
-        paths = [p for p in dict.fromkeys(paths) if p and p not in got][:max(0, SITE_FILES - len(got))]
+        paths = [p for p in dict.fromkeys(paths) if p and p not in got and site_under(p, base)][:max(0, SITE_FILES - len(got))]
         for p, b in zip(paths, await asyncio.gather(*(site_file(mid, p) for p in paths))):
             got[p] = b
     base = site_dir(path)
@@ -8903,6 +8921,13 @@ def signed(c: dict, msg: dict) -> dict:
     return {**msg, "text": f"[from {msg['by']}] {msg.get('text') or ''}"}
 
 
+def owner_asks(msg: dict, dev: dict) -> dict:
+    """The words the pc's owner wrote, for the guard's list of folders they named (secret-guard.py asked_for)."""
+    by, cfg = str(msg.get("by") or ""), read_json(TOKENS_FILE, {}).get(dev.get("name", "")) or {}
+    # the pc's token's own person, or an admin for an admins' own device ("self"), as own_token decides
+    return {"asks": str(msg.get("text") or "")} if by and own_token(cfg, {"user": by, "admin": by in ADMINS}, steer=False) else {}
+
+
 @server.custom_route("/machine/chats", methods=["GET"])
 async def machine_chats(request: Request):
     """The companion asks every ~2 s while a chat is active (else ~10 s): new messages for it to run (handed out
@@ -8973,7 +8998,7 @@ async def machine_chats(request: Request):
                 if e.get("stop"):
                     out["stop"].append(cid)
                 for m in e.pop("live", []):  # a live chat's message while it works: into its running agent (now or force)
-                    m = signed(c, m)
+                    m = {**signed(c, m), **owner_asks(m, dev)}
                     out["work"].append({"chat": cid, "agent": c["agent"], "folder": c["folder"], "session": c.get("session", ""),
                                         "model": c.get("model", ""), "effort": c.get("effort", ""), "allow": c.get("allow", []),
                                         "account": chat_account(mid, c, m.get("by") or c.get("by", "")),
@@ -8983,6 +9008,7 @@ async def machine_chats(request: Request):
                     out.setdefault("steer", []).extend({"chat": cid, **x} for x in (s if isinstance(s, list) else [s]))
             elif "msg" in e:
                 msg = signed(c, e.pop("msg"))
+                msg = {**msg, **owner_asks(msg, dev)}  # before a hand-over transcript or the title ask is added
                 if (h := c.get("handoff")) and not c.get("session"):  # continued in another agent: until it has a session of its own
                     old = {**c, "events": [x for x in c.get("events") or [] if x.get("n", 0) <= h.get("upto", 0)]}
                     msg = {**msg, "text": CHAT_HANDOFF.format(old=h.get("from", "?"), transcript=chat_transcript(old, 40000)) + (msg.get("text") or "")}

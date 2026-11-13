@@ -954,6 +954,7 @@ def chats_contract(tmp, ck, fr, raw, er, et):
     got = json.loads(http("GET", "/machine/chats", token=fr, headers=pc)[1])
     assert [(w["chat"], w["agent"], w["folder"], w["text"], w["session"]) for w in got["work"]] == [(cid, "codex", "/home/x/garden", "hello <b>agent</b>" + srv.CHAT_TITLE_ASK.format(chat=cid), "")], got
     assert "knowledge_chat_title" in srv.CHAT_TITLE_ASK and f"chat {cid}," in srv.CHAT_TITLE_ASK.format(chat=cid), "the first turn asks for a title and names the chat"
+    assert got["work"][0]["asks"] == "hello <b>agent</b>", "the owner's own words, without the title ask, open folders to the guard"
     again = json.loads(http("GET", "/machine/chats", token=fr, headers=pc)[1])
     assert again["work"] == [] and again["busy"] == [cid] and again["active"], again
     assert json.loads(http("GET", "/machine/chats", token=fr, headers={"X-Knowledge-Machine": "eeeeeeeeeeeeeeee"})[1])["work"] == []
@@ -1665,12 +1666,13 @@ def share_contract(tmp, ck, fr, raw, er, et):
     made = json.loads(ui("/ui/api/chats", {"machine": mid, "agent": "claude", "folder": "/home/x/garden"}, er)[2])["chat"]
     assert made["account"] == "erin", made  # a new chat starts on that person's main account
     assert ui("/ui/api/chat/send", {"machine": mid, "id": made["id"], "text": "hi", "account": "home"}, er)[0] == 400, "never another person's account"
-    turn_acc = lambda: [w.get("account") for w in poll()["work"] if w["chat"] == made["id"]]
-    assert ui("/ui/api/chat/send", {"machine": mid, "id": made["id"], "text": "hi"}, er)[0] == 200 and turn_acc() == ["erin"], "her turn on her account"
+    turn_acc = lambda: [(w.get("account"), w.get("asks")) for w in poll()["work"] if w["chat"] == made["id"]]
+    assert ui("/ui/api/chat/send", {"machine": mid, "id": made["id"], "text": "hi"}, er)[0] == 200 and turn_acc() == [("erin", None)], \
+        "her turn on her account; a guest's words never open a folder to the guard (only the pc owner's are asks)"
     http("POST", "/machine/chats/events", {"chat": made["id"], "events": [], "done": True}, token=fr, headers=pc)
     gone = {**crep, "agents": {**crep["agents"], "claude": {"accounts": [a for a in accs if a["id"] != "erin"] + [{"id": "erin", "kind": "apikey", "by": "mallory"}]}}}
     http("POST", "/machine/report", gone, token=fr, headers=pc)
-    assert ui("/ui/api/chat/send", {"machine": mid, "id": made["id"], "text": "again"}, er)[0] == 200 and turn_acc() == [""], \
+    assert ui("/ui/api/chat/send", {"machine": mid, "id": made["id"], "text": "again"}, er)[0] == 200 and turn_acc() == [("", None)], \
         "an account of that name added by someone else since: the turn runs on the pc's own sign-in, never on theirs"
     http("POST", "/machine/chats/events", {"chat": made["id"], "events": [], "done": True}, token=fr, headers=pc)
     http("POST", "/machine/report", crep, token=fr, headers=pc)
@@ -2291,7 +2293,8 @@ def files_contract(tmp, ck, fr, raw, er, et):
         assert raw("GET", f"/ui/api/files/preview?machine={mid}&path=/home/x/a.md", None, ck)[0] == 400, "only .html has a preview"
         files, page = asked(lambda: raw("GET", f"/ui/api/files/preview?machine={mid}&path=/home/x/garden/p.HTML", None, ck))
         assert [(f["op"], f["path"]) for f in files] == [("read", "/home/x/garden/p.HTML")], files
-        page_html = '<link rel="stylesheet" href="css/s.css"><a href="b.html">b</a><p>pw Sup3rSecret99</p>'
+        # ../trade/k.png: another linked project's file is never pulled into a page (it could send it on)
+        page_html = '<link rel="stylesheet" href="css/s.css"><a href="b.html">b</a><img src="../trade/k.png"><p>pw Sup3rSecret99</p>'
         http("POST", "/machine/files/answer", {"id": files[0]["id"], "text": page_html, "mtime": "1", "size": 1}, token=fr, headers=pc)
         css = json.loads(http("GET", "/machine/actions?wait=8", None, fr, pc)[1])["files"]  # the page's own CSS, asked next
         assert [(f["op"], f["path"]) for f in css] == [("read", "/home/x/garden/css/s.css")], css
@@ -3800,6 +3803,7 @@ def main():
         assert admin("/ui/api/admin/project-rename", {"name": "garden", "to": "orchard"})[0] == 400  # taken
         assert admin("/ui/api/admin/project-rename", {"name": "trade", "to": "bourse"})[0] == 400  # built in
         assert admin("/ui/api/admin/project-rename", {"name": "orchard", "to": "Bad-Name"})[0] == 400
+        assert admin("/ui/api/admin/project-rename", {"name": "orchard", "to": "alice"})[0] == 400, "a person's name: their shares would move"
         st, _, res = admin("/ui/api/admin/project-rename", {"name": "orchard", "to": "grove"})
         res = json.loads(res)
         assert st == 200 and res["project"] == "grove" and res["memos"] == ["grove-memory/project_trees.md"] and "relinked" not in res, res

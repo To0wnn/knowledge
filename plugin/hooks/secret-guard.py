@@ -110,12 +110,20 @@ def targets(agent: str, hook: dict) -> list:
     return [str(inp[k]) for k in ("file_path", "notebook_path") if isinstance(inp.get(k), str) and inp[k]]
 
 
+# what an agent itself writes with its edit tools in its own folders (plans, memory, todos, agy's artifacts); never
+# their settings, hooks, plugins or skills, nor the knowledge home (the asks file, the companion's state): a session
+# that could write those could switch this guard off
+AGENT_DIRS = (".claude/plans", ".claude/projects", ".claude/todos", ".claude/tasks", ".codex/memories",
+              ".gemini/antigravity-cli/brain", ".gemini/antigravity-cli/scratch", ".gemini/antigravity-cli/knowledge")
+
+
 def roots(cwd: str, env) -> list:
-    """Where a companion-started session may write: its checkout (the main one too, for a linked worktree), the
-    agents' own folders and the temp folder."""
+    """Where a companion-started session may write: its checkout (the main one too, for a linked worktree, except a
+    guest's), the agents' own working folders and the temp folder."""
     home = Path.home()
-    out = [cwd, str(home / ".claude"), str(home / ".codex"), str(home / ".gemini"),
-           env.get("KNOWLEDGE_HOME") or str(home / ".knowledge"), tempfile.gettempdir()]
+    out = [cwd, *(str(home / d) for d in AGENT_DIRS), tempfile.gettempdir()]
+    if env.get("CLAUDE_CONFIG_DIR"):  # another Claude account: its own folder (its projects/ links to ~/.claude's)
+        out += [str(Path(env["CLAUDE_CONFIG_DIR"]) / d.split("/", 1)[1]) for d in AGENT_DIRS if d.startswith(".claude/")]
     for d in (Path(cwd), *Path(cwd).parents):
         git = d / ".git"
         if git.is_dir():
@@ -125,14 +133,15 @@ def roots(cwd: str, env) -> list:
             out.append(str(d))
             m = re.match(r"gitdir:\s*(.+)", git.read_text(encoding="utf-8", errors="replace").strip())
             parts = Path(m[1]).parts if m else ()
-            if ".git" in parts:
+            if ".git" in parts and not env.get("KNOWLEDGE_GUEST"):  # a guest never works in the owner's own checkout
                 out.append(str(Path(*parts[:parts.index(".git")])))
             break
     return out
 
 
 def within(path: str, root: str) -> bool:
-    p, r = (os.path.normcase(os.path.abspath(x)) for x in (path, root))
+    # realpath: a symlink or junction in the project (a cloned repo can carry one) points where it really writes
+    p, r = (os.path.normcase(os.path.realpath(x)) for x in (path, root))
     return p == r or p.startswith(r.rstrip(os.sep) + os.sep)
 
 
@@ -140,14 +149,15 @@ def asked_for(path: str, asks: str) -> bool:
     """Whether the owner named `path` or a folder holding it (deeper than the home folder, never a root) in `asks`."""
     flat = lambda x: (x.lower() if os.name == "nt" else x).replace("\\", "/").rstrip("/")
     text, home = flat(asks), flat(str(Path.home()))
-    p = os.path.abspath(path)
+    p = os.path.realpath(path)
     while True:
         up = os.path.dirname(p)
         f = flat(p)
         if up == p or f == home or home.startswith(f + "/"):  # a root, the home folder or above: too broad to count
             return False
         for name in {f, "~" + f[len(home):]} if f.startswith(home + "/") else {f}:
-            if re.search(re.escape(name) + r"(?![\w.-]|/[\w.-])", text, re.I if os.name == "nt" else 0):
+            # whole: "/opt/app" inside "/mnt/backup/opt/app" names another folder
+            if re.search(r"(?<![\w.~/-])" + re.escape(name) + r"(?![\w.-]|/[\w.-])", text, re.I if os.name == "nt" else 0):
                 return True
         p = up
 
@@ -224,6 +234,15 @@ def self_test():
         for bad in (str(outer), "../" * 40 + "x.txt"):
             assert json.loads(scope("claude", {"tool_input": {"file_path": bad}}, env))["hookSpecificOutput"]["permissionDecision"] == "deny", bad
         assert scope("claude", {"tool_input": {"file_path": str(outer)}}, {}) == "", "a person's own session is not limited"
+        for bad in (Path.home() / ".claude" / "settings.json", Path.home() / ".claude" / "plugins" / "x" / "secret-guard.py",
+                    Path.home() / ".knowledge" / "asks" / "c1.txt", Path.home() / ".knowledge" / "companion" / "admin_launch.py",
+                    Path.home() / ".codex" / "config.toml"):
+            assert scope("claude", {"tool_input": {"file_path": str(bad)}}, env), f"the guard's own ground: {bad}"
+        assert str(main) in roots(str(wt / "sub"), env) and str(main) not in roots(str(wt / "sub"), {**env, "KNOWLEDGE_GUEST": "1"}), \
+            "a guest: not the owner's checkout"
+        if os.name != "nt":
+            (wt / "out").symlink_to(Path.home())
+            assert scope("claude", {"tool_input": {"file_path": str(wt / "out" / ".bashrc")}}, env), "a link out of the project"
         patch = f"*** Begin Patch\n*** Update File: a.py\n*** Move to: {outer}\n*** End Patch"
         assert scope("codex", {"tool_input": {"command": patch}}, env), "codex: a move out of the project"
         assert scope("codex", {"tool_input": {"command": "*** Add File: x/y.py\n+1"}}, env) == ""
@@ -240,6 +259,8 @@ def self_test():
         asks.write_text(f"alles mag in {Path.home()} en {Path(os.path.abspath(os.sep))}\n", encoding="utf-8")
         assert scope("claude", {"tool_input": {"file_path": str(Path.home() / "Documents" / "x")}}, env), "the home folder is too broad"
         assert scope("claude", {"tool_input": {"file_path": str(named / "a")}}, env), "a drive root is too broad"
+        asks.write_text(f"copy it from /mnt/backup{named}\n", encoding="utf-8")
+        assert scope("claude", {"tool_input": {"file_path": str(named / "a")}}, env), "a longer path names another folder"
         asks.write_text("put it in ~/Desktop please\n", encoding="utf-8")
         assert scope("claude", {"tool_input": {"file_path": str(Path.home() / "Desktop" / "y.txt")}}, env) == "", "~/ counts"
     print("ok")

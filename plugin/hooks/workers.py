@@ -388,7 +388,8 @@ def start(agent: str, task: dict, machine: str, where: dict, yolo: bool, nonce: 
     DIR.mkdir(parents=True, exist_ok=True)
     log = DIR / f"{safe(task['project'])}-{safe(task['id'])}-{int(time.time())}.log"
     env = {**os.environ, "KNOWLEDGE_WORKER": task["id"], "KNOWLEDGE_START_NONCE": nonce, "KNOWLEDGE_YOLO": "1" if yolo else "",
-           "KNOWLEDGE_ASKS": remember_ask(f"task-{task['project']}-{task['id']}", task.get("text") or "")}
+           # no task text: an agent may write a task line, so naming a folder there must not open it
+           "KNOWLEDGE_ASKS": remember_ask(f"task-{task['project']}-{task['id']}", "")}
     if agent == "claude":
         import accounts  # here: accounts imports this module for its .cmd shim
         if extra := accounts.env(account):  # another account, or the pc's own on a token or key

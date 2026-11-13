@@ -1208,7 +1208,8 @@ class Live:
         cmd = self.command(exe)
         if os.name == "nt" and exe.lower().endswith((".cmd", ".bat")):
             cmd = workers.shim_line(cmd)
-        env = {**os.environ, "KNOWLEDGE_CHAT": self.cid, "KNOWLEDGE_ASKS": str(workers.ASKS / f"{workers.safe(self.cid)}.txt")}
+        env = {**os.environ, "KNOWLEDGE_CHAT": self.cid, "KNOWLEDGE_ASKS": str(workers.ASKS / f"{workers.safe(self.cid)}.txt"),
+               **({"KNOWLEDGE_GUEST": "1"} if item.get("guest") else {})}  # the guard: never the owner's own checkout
         if item.get("reader"):
             env["CLAUDE_CODE_SUBAGENT_MODEL"] = str(item["reader"])
         # another Claude account (its own config folder, its token or key), or the pc's own on a token or key: never
@@ -2165,7 +2166,9 @@ def start(item: dict, post, log, linked, yolo, fetch=None):
     def job():
         if fetch:
             item["text"] = attach(item.get("text", ""), fetch)
-        workers.remember_ask(cid, item.get("text", ""))  # before the agent sees it: a folder named here may be written
+        # before the agent sees it: a folder the pc's owner names here may be written (`asks`: only their own words, never
+        # a guest's or joined person's, nor a hand-over transcript; an older server sends none)
+        workers.remember_ask(cid, item.get("asks", ""))
         told = False  # a new agent at the pc's limit: wait for a free place (or a Stop), not fail
         while not ((lv := LIVE.get(cid)) and lv.alive()) and STOPS.get(cid, [gen])[0] == gen and full():
             if not told:
