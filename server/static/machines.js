@@ -203,7 +203,7 @@ function meters(pcs, a) {
     const accMap = new Map();
     for (const m of pcs) {
       for (const acc of m.agents?.claude?.accounts || []) {
-        if (acc.mine === false) continue;
+        if (acc.mine === false || !accountSignedIn(acc)) continue; // signed out: its usage is from before
         const id = acc.id || "";
         if (!accMap.has(id)) accMap.set(id, { id, by: {}, isMain: false, email: "", plan: "", kind: acc.kind, budget: acc.budget, spent: acc.spent });
         const rec = accMap.get(id);
@@ -216,7 +216,7 @@ function meters(pcs, a) {
       }
     }
     if (accMap.size > 1) {
-      for (const [id, acc] of accMap) {
+      for (const [id, acc] of [...accMap].sort((x, y) => y[1].isMain - x[1].isMain)) {
         const grp = el("div", "mx-meter-group"), head = el("div", "mx-meter-group-head");
         head.append(el("b", null, id || "own"));
         if (acc.isMain) {
