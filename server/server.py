@@ -3713,7 +3713,7 @@ def note_user(username: str):
     """Remember someone who signed in without access, so an admin can grant it in the UI."""
     users = read_json(USERS_FILE, {})
     if username not in users and username not in ADMINS and len(users) < 500:
-        write_json(USERS_FILE, {**users, username: {"projects": {}, "first_seen": int(time.time())}})
+        update_state(USERS_FILE, lambda d: d.setdefault(username, {"projects": {}, "first_seen": int(time.time())}))
 
 
 def proxied_user(headers: dict) -> str:
@@ -5631,7 +5631,8 @@ async def ui_admin_state(request: Request, _):
     labels = read_json(LABELS_FILE, {})
     dev = device.get()
     if not dev.get("admin"):
-        me = read_json(USERS_FILE, {}).get(dev["user"], {})
+        users = read_json(USERS_FILE, {})
+        me = users.get(dev["user"], {})
         return JSONResponse({
             "admin": False, "user": dev["user"],
             "projects": [{"name": p, "docs": d, "memory": m, "builtin": p in BUILTIN_PROJECTS, "label": labels.get(p),
@@ -5643,6 +5644,9 @@ async def ui_admin_state(request: Request, _):
                        for n, cfg in sorted(tokens.items()) if cfg.get("owner") == dev["user"]],
             "limits": {"projects": USER_MAX_PROJECTS, "tokens": USER_MAX_TOKENS, "project_mb": PROJECT_MAX_MB,
                        "created": len(me.get("created", []))},
+            # the members panel of the projects they made, and what their own pcs share there
+            "members": {p: project_members(p, users) for p in me.get("created", []) if p in PROJECTS},
+            "pcs": [m for m in await asyncio.to_thread(pc_shares_overview) if m["mine"]],
         })
     return JSONResponse({"admin": True,
         "admins": sorted(ADMINS),
@@ -5662,6 +5666,8 @@ async def ui_admin_state(request: Request, _):
         "system": await asyncio.to_thread(system_state),
         "external": read_json(EXTERNAL_FILE, {}),
         "pcs": await asyncio.to_thread(pc_shares_overview),
+        "members": {p: project_members(p, read_json(USERS_FILE, {})) for p in PROJECTS},
+        "user": dev.get("user", ""),
     })
 
 
@@ -5716,19 +5722,86 @@ async def ui_admin_user(request: Request, body: dict):
     name = str(body["username"]).strip()
     if not re.fullmatch(r"[\w.@+-]{1,150}", name) or name in ADMINS:
         raise ToolError("unknown or protected username (admins are set in the server config)")
-    users = dict(read_json(USERS_FILE, {}))
-    if body.get("delete"):
-        users.pop(name, None)
-    elif body.get("add") and name in users:
+    if body.get("add") and name in read_json(USERS_FILE, {}):
         raise ToolError(f"{name} is already listed; change their projects in the table")
-    else:
-        perms = {p: m for p, m in dict(body.get("projects", {})).items() if m in ("read", "write")}
-        if set(perms) - set(PROJECTS):
-            raise ToolError(f"unknown project: {', '.join(sorted(set(perms) - set(PROJECTS)))}")
-        users[name] = {**users.get(name, {}), "projects": perms}
-    write_json(USERS_FILE, users)
+    perms = {p: m for p, m in dict(body.get("projects", {})).items() if m in ("read", "write")}
+    if set(perms) - set(PROJECTS):
+        raise ToolError(f"unknown project: {', '.join(sorted(set(perms) - set(PROJECTS)))}")
+    # under the state lock: makers add members to their projects at the same time (POST /ui/api/project/member)
+    await asyncio.to_thread(update_state, USERS_FILE, lambda d: d.pop(name, None) if body.get("delete") else d.update({name: {**d.get(name, {}), "projects": perms}}))
     audit("admin-user", name)
     return JSONResponse({"ok": True})
+
+
+def member_source(user: str, project: str, users: dict) -> str:
+    """Why a person may see a project, for the members panel: "creator", "invited by <who>" or "admin" (granted on
+    the admin page before invites were recorded)."""
+    u = users.get(user, {})
+    return "creator" if project in u.get("created", []) else f"invited by {by}" if (by := u.get("invited", {}).get(project)) else "admin"
+
+
+def project_members(project: str, users: dict) -> list[dict]:
+    """The people with access to a project (not the admins, who see every project), with their mode and source."""
+    return [{"user": u, "mode": c["projects"][project], "source": member_source(u, project, users)}
+            for u, c in sorted(users.items()) if project in c.get("projects", {}) and u not in ADMINS]
+
+
+@server.custom_route("/ui/api/project/member", methods=["POST"])
+@signed_in
+async def ui_project_member(request: Request, body: dict):
+    """{project, user, mode: "read" | "write" | ""}: give one person access to one project, change it, or take it away
+    (""). An admin for every project; a person for a project they made, only to someone who already signs in here
+    (an admin adds new people), never above their own write. Access shows no chats: a pc's owner shares those."""
+    dev, project, user, mode = device.get(), str(body.get("project", "")), str(body.get("user", "")).strip(), str(body.get("mode") or "")
+    if project not in PROJECTS or mode not in ("read", "write", ""):
+        raise ValueError("unknown project, or mode is not read, write or empty")
+    users = read_json(USERS_FILE, {})
+    if not dev.get("admin") and (project_owner(project) != dev.get("user") or users.get(dev.get("user"), {}).get("projects", {}).get(project) != "write"):
+        return JSONResponse({"error": "only the person who made a project, while they may edit it (or an admin), adds its members"}, status_code=403)
+    if not dev.get("admin") and (user in ADMINS or user == dev.get("user") or user not in users):
+        # one answer for all three: a non-admin may not learn who signs in here or who is an admin by trying names
+        raise ValueError(f"{user or '(empty)'} cannot be added: check the name, or ask the admin (someone signs in once before they can be added)")
+    if user in ADMINS:
+        raise ValueError("admins see every project")
+    if project_owner(project) == user:
+        raise ValueError(f"{user} made {project}; their access stays write")
+    if user not in users:
+        raise ValueError(f"nobody called {user or '(empty)'} signs in here yet: they sign in once (then they show under People), after that they can be added")
+    if not mode and project not in users[user].get("projects", {}):  # nothing to take away: no audit line, no message
+        return JSONResponse({"ok": True, "members": project_members(project, users), "tokens_widened": []})
+    before = set(user_device(user)["roots"]) if user_device(user) else set()
+
+    def change(d):
+        c = d.get(user)
+        if c is None:
+            return
+        projects = {p: m for p, m in c.get("projects", {}).items() if p != project} | ({project: mode} if mode else {})
+        invited = {p: b for p, b in c.get("invited", {}).items() if p != project} | ({project: dev.get("user", "")} if mode else {})
+        d[user] = {**{k: v for k, v in c.items() if k != "invited"}, "projects": projects, **({"invited": invited} if invited else {})}
+    await asyncio.to_thread(update_state, USERS_FILE, change)
+    if not mode:  # access gone: their pc shares in this project go too, so adding them back never revives one unasked
+        def unshare(d):
+            for s in d.values():
+                if user in ((s.get("projects") or {}).get(project) or {}):
+                    s["projects"][project].pop(user)
+                    if not s["projects"][project]:
+                        s["projects"].pop(project)
+            for mid in [m for m, s in d.items() if not s.get("projects")]:
+                d.pop(mid)
+        await asyncio.to_thread(update_state, SHARES_FILE, unshare)
+    widened = []
+    if mode:  # their tokens that reach all they had reach this too, as the maker's do (project creation)
+        def widen(d):
+            for t, cfg in d.items():
+                if cfg.get("owner") == user and cfg.get("roots") and before and before <= set(cfg["roots"]) \
+                        and not set(PROJECTS[project]) <= set(cfg["roots"]):
+                    cfg["roots"] = sorted(set(cfg["roots"]) | set(PROJECTS[project]))
+                    widened.append(t)
+        await asyncio.to_thread(update_state, TOKENS_FILE, widen)
+    audit("project-member", f"{project} {user} {mode or 'off'}")
+    if not dev.get("admin"):
+        notify(f"Knowledge: {dev.get('user')} gave {user} {mode or 'no'} access to their project {project}.")
+    return JSONResponse({"ok": True, "members": project_members(project, read_json(USERS_FILE, {})), "tokens_widened": widened})
 
 
 @server.custom_route("/ui/api/admin/project-label", methods=["POST"])
@@ -5803,11 +5876,11 @@ async def ui_admin_project(request: Request, body: dict):
             raise ToolError(f"you may create {USER_MAX_PROJECTS} projects; ask the admin for more")
     mems = {m for _, m in PROJECTS.values()}  # the memory roots before the new project
     await asyncio.to_thread(create_project, name)
-    if not dev.get("admin"):  # the maker may edit it; the admin sees it under People
-        me = users.get(dev["user"], {})
-        users[dev["user"]] = {**me, "projects": {**me.get("projects", {}), name: "write"},
-                              "created": [*me.get("created", []), name]}
-        write_json(USERS_FILE, users)
+    if not dev.get("admin"):  # the maker may edit it; the admin sees it under People (re-read: create_project takes a while)
+        def made(d):
+            me = d.get(dev["user"], {})
+            d[dev["user"]] = {**me, "projects": {**me.get("projects", {}), name: "write"}, "created": [*me.get("created", []), name]}
+        await asyncio.to_thread(update_state, USERS_FILE, made)
     if not dev.get("admin"):
         notify(f"Knowledge: {dev['user']} created project {name} (limit {PROJECT_MAX_MB} MB); see admin page, Projects.")
     # A token that sees the memory of every project (vm-sessions: session logs, VM sessions) also gets the new one;

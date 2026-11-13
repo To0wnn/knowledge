@@ -709,8 +709,21 @@ audio.fm-media { width: 100%; }
 .machine-list { margin: 4px 0; padding: 0; list-style: none; font-size: 13px; }
 .machine-list li { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; padding: 3px 0; overflow-wrap: anywhere; }
 .machine-list li.worker, .machine-list li.tool { align-items: flex-start; padding: 9px 0; border-top: 1px solid var(--line); }
-.pc-shares { margin-top: 4px; font-size: 12px; display: grid; gap: 2px; }
-.pc-shares select { margin-left: 4px; }
+/* Admin › People: one card per project, a row per member (name, access, why, what each pc shares with them). */
+.members { display: grid; gap: 8px; margin: 12px 0 20px; }
+.members-card { border: 1px solid var(--line); border-radius: var(--r-md); background: var(--panel); }
+.members-card > summary { cursor: pointer; padding: 10px 14px; }
+.member-rows { list-style: none; margin: 0; padding: 0 14px; }
+.member { display: grid; grid-template-columns: minmax(110px, 1fr) minmax(150px, auto) minmax(110px, 1fr) minmax(220px, 2fr); gap: 12px;
+  align-items: center; padding: 8px 0; border-top: 1px solid var(--line); }
+.member-access { display: flex; gap: 6px; align-items: center; }
+.member-source { font-size: 13px; }
+.member-add { padding: 10px 14px; border-top: 1px solid var(--line); }
+.pc-shares { display: grid; gap: 4px; font-size: 13px; }
+.pc-share { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; }
+.pc-shares select.ask { box-shadow: 0 0 0 2px var(--accent, #2f7d5b); }
+.ask-hint { font-size: 12px; color: var(--accent, #2f7d5b); }
+@media (max-width: 700px) { .member { grid-template-columns: 1fr; gap: 4px; } }
 .worker-text, .tool-main { flex: 1 1 320px; min-width: 0; display: grid; gap: 3px; }
 .worker-title { font-weight: 600; line-height: 1.35; }
 .worker-text > .pill { justify-self: start; }
