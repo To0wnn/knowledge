@@ -232,17 +232,14 @@ fixed remote actions and relays chats. Installing it is part of the client setup
 - **More than one Claude account on a pc** (`plugin/hooks/accounts.py`): Machines > Claude Code > Accounts lists the
   pc's own sign-in and each extra account, with its plan and the usage of its chat turns. Add account… takes a name
   (a-z, 0-9, -) and one of three ways in (Change sign-in… on an account's row switches it to another):
-  - **Sign in with the browser:** the companion runs `claude auth login` in the account's folder; its sign-in link shows
-    in the row (Open sign-in). After signing in, claude.com shows a code; Paste code… sends it to that waiting run (it
-    only works with that run's own PKCE verifier; the run ends after 15 minutes).
-  - **Long-lived token:** `claude setup-token` in a terminal on any pc (it needs an interactive terminal, so the
-    companion cannot run it via the browser), or pasted directly into Paste code… / Add account. It is kept in the
-    account's folder (owner only) and given to a chat as `CLAUDE_CODE_OAUTH_TOKEN`, which Claude Code prefers over a
-    stored sign-in.
-  - **API key:** an Anthropic Console key (`sk-ant-api03-...`), billed per use instead of the subscription; kept the same
-    way and given as `ANTHROPIC_API_KEY` (Claude Code then runs in `api_key` mode, also in `claude -p`). A token and a
-    key replace each other; a browser sign-in removes both. The pc's own `CLAUDE_CODE_OAUTH_TOKEN`, `ANTHROPIC_API_KEY`
-    and `ANTHROPIC_AUTH_TOKEN` never reach a chat of another account.
+  - **Sign in with the browser:** the companion runs `claude auth login` in the account's folder; its sign-in link
+    shows in the row (Open sign-in). An inline input with Confirm lets you paste the code from claude.com.
+  - **Switch to long-lived token…:** runs `claude setup-token` in a pty on the pc; Open sign-in opens the authorization
+    link in your browser, and pasting the code into the inline input and clicking Confirm saves the 1-year token. (Note:
+    anthropic's web flow may reject `code=true` with inference-only scope; if so, run `claude setup-token` in a terminal
+    and paste the resulting `sk-ant-oat...` token directly into Confirm).
+  - **Long-lived token / API key directly:** `sk-ant-oat01-…` from a terminal or `sk-ant-api03-…` Console key, pasted into
+    Add account or the inline input. Given to a chat as `CLAUDE_CODE_OAUTH_TOKEN` or `ANTHROPIC_API_KEY`.
 - **How a chat uses it:** the model chip of a Claude chat gets an Account row (own first, each with what is left of
   it) when the pc has accounts of yours; the choice holds for the chat from the next turn on (`account` in the chat,
   checked against what the pc reported and against who added it). The companion then starts Claude with

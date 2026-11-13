@@ -242,7 +242,14 @@ def status(d: Path, fresh: bool = False) -> dict:
 
 def _drop(name: str):
     rec = LOGINS.pop(name, None)
-    if rec and rec["p"].poll() is None:
+    if not rec:
+        return
+    if "master" in rec:
+        try:
+            os.close(rec["master"])
+        except OSError:
+            pass
+    if rec["p"].poll() is None:
         if os.name == "nt":  # the .cmd shim's cmd.exe: its node child would go on
             subprocess.run(["taskkill", "/F", "/T", "/PID", str(rec["p"].pid)], capture_output=True, timeout=30,
                            creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0))
@@ -278,29 +285,51 @@ def note(name: str, d: Path, **change):
 
 def login(name: str, wait: float = 30, by: str = "", setup: bool = False) -> str:
     """Start a browser sign-in for account `name` (made when new; "" signs the pc's own in again); the URL to open.
-    The code goes in with code(). By default it runs `claude auth login` (reliable browser flow with rolling refresh
-    tokens). When `setup` is True, it runs `claude setup-token`."""
+    The code goes in with code(). When `setup` is True, it runs `claude setup-token` in a pty to create a 1-year
+    long-lived token directly; when False (default), it runs standard `claude auth login`."""
     d = where(name)
     if name:
         sync(d)
     with LOCK:
         _drop(name)
         e = run_env(name, d)
-        # BROWSER: a pc without a desktop session must not start one (xdg-open honours it); the page opens the link
         cmd = command("setup-token") if setup else command("auth", "login", "--claudeai")
-        p = subprocess.Popen(cmd, stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
-                             env={**e, "BROWSER": "true" if os.name != "nt" else e.get("BROWSER", "")},
-                             text=True, encoding="utf-8", errors="replace")
-        rec = LOGINS[name] = {"p": p, "url": "", "out": [], "at": time.time(), "by": by, "setup": setup}
+        if setup and os.name != "nt":
+            import pty
+            master, slave = pty.openpty()
+            p = subprocess.Popen(cmd, stdin=slave, stdout=slave, stderr=slave,
+                                 env={**e, "BROWSER": "true"}, close_fds=True)
+            os.close(slave)
+            rec = LOGINS[name] = {"p": p, "master": master, "url": "", "out": [], "at": time.time(), "by": by, "setup": True}
 
-    def read():
-        for line in p.stdout:
-            rec["out"].append(line.rstrip())
-            if not rec["url"] and (m := URL.search(line)):
-                rec["url"] = m.group(0)
-    threading.Thread(target=read, daemon=True).start()
+            def read_pty():
+                while True:
+                    try:
+                        chunk = os.read(master, 1024)
+                        if not chunk:
+                            break
+                        for line in chunk.decode("utf-8", errors="replace").splitlines():
+                            rec["out"].append(line.rstrip())
+                            if not rec["url"] and (m := URL.search(line)):
+                                rec["url"] = m.group(0)
+                    except OSError:
+                        break
+            threading.Thread(target=read_pty, daemon=True).start()
+        else:
+            p = subprocess.Popen(cmd, stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
+                                 env={**e, "BROWSER": "true" if os.name != "nt" else e.get("BROWSER", "")},
+                                 text=True, encoding="utf-8", errors="replace")
+            rec = LOGINS[name] = {"p": p, "url": "", "out": [], "at": time.time(), "by": by, "setup": setup}
+
+            def read_pipe():
+                for line in p.stdout:
+                    rec["out"].append(line.rstrip())
+                    if not rec["url"] and (m := URL.search(line)):
+                        rec["url"] = m.group(0)
+            threading.Thread(target=read_pipe, daemon=True).start()
+
     end = time.time() + wait
-    while not rec["url"] and p.poll() is None and time.time() < end:
+    while not rec["url"] and rec["p"].poll() is None and time.time() < end:
         time.sleep(0.1)
     if not rec["url"]:
         with LOCK:
@@ -330,30 +359,38 @@ def code(name: str, text: str, wait: float = 90) -> str:
             LOGINS.pop(name, None)
             raise RuntimeError("no sign-in waits for a code here (it ends after 15 minutes): press Sign in again")
         by = rec.get("by", "")
-        try:
-            rec["p"].stdin.write(clean + "\n\n")
-            rec["p"].stdin.flush()
+        setup = rec.get("setup", False)
+        if "master" in rec:
             try:
-                rec["p"].stdin.close()
-            except OSError:
-                pass
-        except OSError as e:
-            raise RuntimeError(f"the sign-in ended: {e}") from e
-    try:
-        rc = rec["p"].wait(wait)
-    except subprocess.TimeoutExpired:
-        rc = None
+                os.write(rec["master"], (clean + "\n").encode("utf-8"))
+            except OSError as e:
+                raise RuntimeError(f"the sign-in ended: {e}") from e
+        else:
+            try:
+                rec["p"].stdin.write(clean + "\n\n")
+                rec["p"].stdin.flush()
+                try:
+                    rec["p"].stdin.close()
+                except OSError:
+                    pass
+            except OSError as e:
+                raise RuntimeError(f"the sign-in ended: {e}") from e
+
+    end = time.time() + wait
+    if setup:
+        while rec["p"].poll() is None and time.time() < end:
+            if any(re.search(r"sk-ant-oat\d\d-[\w-]{20,400}", line) for line in rec["out"]):
+                break
+            time.sleep(0.1)
+    else:
+        try:
+            rec["p"].wait(wait)
+        except subprocess.TimeoutExpired:
+            pass
+
     with LOCK:
         if LOGINS.get(name) is rec:
             _drop(name)
-    # If the process timed out or failed to exit cleanly, check whether credentials were written successfully:
-    cred = (MAIN if not name else d) / ".credentials.json"
-    if rc != 0 and not rec.get("setup") and cred.exists() and time.time() - cred.stat().st_mtime < wait + 15:
-        rc = 0
-    if rc != 0:
-        said = next((x for x in reversed(rec["out"]) if x.strip()), "no answer")
-        note(name, d, error=said[-300:])
-        raise RuntimeError(f"sign-in failed: {said[-200:]}")
 
     # A 1-year token printed by claude setup-token:
     token = next((m.group(0) for line in rec["out"] if (m := re.search(r"sk-ant-oat\d\d-[\w-]{20,400}", line))), None)
@@ -361,6 +398,17 @@ def code(name: str, text: str, wait: float = 90) -> str:
         set_secret(name, "token", token, by=by)
         s = status(MAIN) if not name else {}
         return f"{name or 'own'}: long-lived token saved" + (f" as {s['email']}" if s.get("email") else "")
+
+    if setup:
+        said = next((x for x in reversed(rec["out"]) if x.strip()), "no answer")
+        note(name, d, error=said[-300:])
+        raise RuntimeError(f"setup-token failed: {said[-200:]}")
+
+    cred = (MAIN if not name else d) / ".credentials.json"
+    if rec["p"].poll() != 0 and not (cred.exists() and time.time() - cred.stat().st_mtime < wait + 15):
+        said = next((x for x in reversed(rec["out"]) if x.strip()), "no answer")
+        note(name, d, error=said[-300:])
+        raise RuntimeError(f"sign-in failed: {said[-200:]}")
 
     for f, _, _, _ in SECRETS.values():  # a browser sign-in replaces a token or key (the pc's own: kept beside ~/.claude)
         (kept(name) / f).unlink(missing_ok=True)
@@ -450,7 +498,7 @@ def listing(windows_of=None, now: float = 0) -> list:
         at = int(oi.get("at") or file_time(MAIN / ".credentials.json"))
         exp = int(s.get("expires") or 0)
     out = [{"id": "", **s, "kind": ok, "preview": prev, "at": at, "expires": exp,
-            "windows": win(""), "error": OWN_ERROR[""], **({"login": LOGINS[""]["url"]} if "" in LOGINS and LOGINS[""]["url"] else {}),
+            "windows": win(""), "error": OWN_ERROR[""], **({"login": LOGINS[""]["url"], "setup": LOGINS[""].get("setup", False)} if "" in LOGINS and LOGINS[""]["url"] else {}),
             **({"spent": spent("", now), **({"budget": oi["budget"]} if oi.get("budget") else {})} if ok == "apikey" else {})}]
     for n in names():
         d, i = ROOT / n, info(ROOT / n)
@@ -468,7 +516,7 @@ def listing(windows_of=None, now: float = 0) -> list:
             exp = int(st.get("expires") or 0)
         out.append({"id": n, "kind": kind, "email": st.get("email") or "", "plan": st.get("plan") or "",
                     "preview": prev, "at": at, "expires": exp, "error": i.get("error") or "",
-                    "by": str(i.get("by") or ""), **({"login": LOGINS[n]["url"]} if n in LOGINS and LOGINS[n]["url"] else {}),
+                    "by": str(i.get("by") or ""), **({"login": LOGINS[n]["url"], "setup": LOGINS[n].get("setup", False)} if n in LOGINS and LOGINS[n]["url"] else {}),
                     "windows": win(n), **({"spent": spent(n, now), **({"budget": i["budget"]} if i.get("budget") else {})} if kind == "apikey" else {})})
     return out
 

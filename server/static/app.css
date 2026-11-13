@@ -586,7 +586,16 @@ body.admin-page { display: block; overflow-y: auto; }
   overflow-wrap: anywhere;
 }
 .mx-account .pill { margin-left: 4px; }
-.mx-account .mx-pop-acts { margin-top: 8px; padding-top: 6px; border-top: 1px solid var(--line); }
+.mx-account .mx-pop-acts { margin-top: 8px; padding-top: 6px; border-top: 1px solid var(--line); flex-wrap: wrap; }
+.mx-account .mx-pop-acts input {
+  height: 26px;
+  padding: 2px 8px;
+  font-size: 12px;
+  border: 1px solid var(--line);
+  border-radius: var(--r-sm);
+  background: var(--bg);
+  color: var(--ink);
+}
 .mx-accounts-add { margin-top: 4px; }
 .acc-bars { display: flex; flex-wrap: wrap; align-items: center; gap: 4px 6px; margin: 2px 0; }
 .acc-bar { width: 56px; height: 6px; display: inline-block; }
