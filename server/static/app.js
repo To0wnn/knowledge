@@ -1723,12 +1723,7 @@ function accountTiming(a) {
   const parts = [];
   const now = Date.now() / 1000;
   if (a.expires && a.expires > 0) {
-    const left = a.expires - now;
-    if (left <= 0) parts.push("expired");
-    else {
-      const exp = left < 3600 ? `in ${Math.floor(left / 60)}m` : left < 86400 ? `in ${Math.floor(left / 3600)}h` : `in ${Math.floor(left / 86400)}d`;
-      parts.push(`expires ${exp} (${fmtDay(a.expires)})`);
-    }
+    parts.push(a.expires <= now ? "expired" : `expires ${fmtDay(a.expires)}`);
   } else if (a.kind === "apikey") {
     parts.push("no expiry");
   }

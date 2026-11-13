@@ -42,7 +42,8 @@ AUTH_ENV = ("CLAUDE_CODE_OAUTH_TOKEN", "ANTHROPIC_API_KEY", "ANTHROPIC_AUTH_TOKE
 # never shared: the sign-in itself, Claude's per-account state (.claude.json and its backups), and the background
 # daemon, which would otherwise take a run of this account under the default one
 NOT_LINKED = {".credentials.json", ".claude.json", "backups", "daemon", "daemon.lock", "daemon.log", "daemon.status.json"}
-URL = re.compile(r"https://\S+/oauth/authorize\?\S+")
+# stops at control characters: in a pty claude draws the link as an OSC 8 hyperlink (ESC]8;;<url>BEL<text>)
+URL = re.compile(r"https://[^\s\x00-\x1f\x7f]+/oauth/authorize\?[^\s\x00-\x1f\x7f]+")
 STATUS_TTL = 6 * 3600
 LOGIN_TTL = 15 * 60  # a sign-in nobody finished: its process ends, the page shows "Sign in" again
 LOGINS: dict = {}  # name -> {"p", "url", "out", "at"}: sign-ins waiting for their code
@@ -303,14 +304,17 @@ def login(name: str, wait: float = 30, by: str = "", setup: bool = False) -> str
             rec = LOGINS[name] = {"p": p, "master": master, "url": "", "out": [], "at": time.time(), "by": by, "setup": True}
 
             def read_pty():
+                seen = ""  # the link can be split over two reads: take it only once a character follows it
                 while True:
                     try:
-                        chunk = os.read(master, 1024)
+                        chunk = os.read(master, 4096)
                         if not chunk:
                             break
-                        for line in chunk.decode("utf-8", errors="replace").splitlines():
-                            rec["out"].append(line.rstrip())
-                            if not rec["url"] and (m := URL.search(line)):
+                        text = chunk.decode("utf-8", errors="replace")
+                        rec["out"].extend(line.rstrip() for line in text.splitlines())
+                        if not rec["url"]:
+                            seen += text
+                            if (m := URL.search(seen)) and m.end() < len(seen):
                                 rec["url"] = m.group(0)
                     except OSError:
                         break
@@ -620,7 +624,10 @@ def self_test():
             "        print('Login failed: That code was not accepted.'); sys.exit(1)\n"
             "    json.dump({'claudeAiOauth': {'accessToken': 'new'}}, open(os.path.join(d, '.credentials.json'), 'w')); print('Login successful.')\n"
             "elif sys.argv[1:2] == ['setup-token']:\n"
-            "    print('If the browser did not open, visit: https://claude.com/cai/oauth/authorize?code=true&state=x', flush=True)\n"
+            "    u = 'https://claude.com/cai/oauth/authorize?code=true&state=x'\n"
+            "    # the real one draws the link as an OSC 8 hyperlink in a terminal, the URL split over two writes\n"
+            "    sys.stdout.write('Use the url below\\r\\n\\x1b]8;id=1;' + u[:20]); sys.stdout.flush()\n"
+            "    sys.stdout.write(u[20:] + '\\x07' + u[:30] + '\\x1b]8;;\\x07\\r\\n'); sys.stdout.flush()\n"
             "    print('Paste code here if prompted > ', end='', flush=True)\n"
             "    c = sys.stdin.readline().strip()\n"
             "    if c != 'good#code':\n"

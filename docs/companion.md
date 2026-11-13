@@ -235,9 +235,9 @@ fixed remote actions and relays chats. Installing it is part of the client setup
   - **Sign in with the browser:** the companion runs `claude auth login` in the account's folder; its sign-in link
     shows in the row (Open sign-in). An inline input with Confirm lets you paste the code from claude.com.
   - **Switch to long-lived token…:** runs `claude setup-token` in a pty on the pc; Open sign-in opens the authorization
-    link in your browser, and pasting the code into the inline input and clicking Confirm saves the 1-year token. (Note:
-    anthropic's web flow may reject `code=true` with inference-only scope; if so, run `claude setup-token` in a terminal
-    and paste the resulting `sk-ant-oat...` token directly into Confirm).
+    link in your browser, and pasting the code into the inline input and clicking Confirm saves the 1-year token. In a
+    pty claude draws the link as an OSC 8 hyperlink (`ESC]8;;<url>BEL<text>`); the link is cut at the first control
+    character, else the page gets a broken `state` and says "Sign-in did not complete".
   - **Long-lived token / API key directly:** `sk-ant-oat01-…` from a terminal or `sk-ant-api03-…` Console key, pasted into
     Add account or the inline input. Given to a chat as `CLAUDE_CODE_OAUTH_TOKEN` or `ANTHROPIC_API_KEY`.
 - **How a chat uses it:** the model chip of a Claude chat gets an Account row (own first, each with what is left of
@@ -266,7 +266,7 @@ fixed remote actions and relays chats. Installing it is part of the client setup
   page shows its usage and budget.
 - **Token type and validity:** Machines shows for each account what kind of sign-in or token it uses (browser sign-in,
   long-lived token, API key) with a safe preview of the token prefix and suffix (`sk-ant-oat01-…xxxx` or
-  `sk-ant-api03-…xxxx`), and its validity ("expires in 28d", 1 year for long-lived tokens from `setup-token`, or
+  `sk-ant-api03-…xxxx`), and its validity ("expires 11 Dec 2026", 1 year for long-lived tokens from `setup-token`, or
   "no expiry" for API keys). The chat picker shows the same in each account's tooltip.
 - **The pc's own sign-in:** the companion talks to the server with its own token, not with Claude's sign-in, so it
   stays online when Claude is signed out. The owner signs it in again from the page (Sign in again, the same browser
