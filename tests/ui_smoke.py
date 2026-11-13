@@ -753,6 +753,15 @@ async def cockpit_shell(browser, devices, secret: str) -> None:
             check(stays == (1 if has_levels else 0) or stays == 1, f"model chip: after a model the panel stays open for its effort ({stays}, levels {has_levels})")
         await pg.mouse.click(5, 5)
         check(not await pg.locator("#ck-canvas details.ck-model[open]").count(), "model chip: a click outside closes the panel")
+        # an extra Claude account on the draft's pc: an Account row with the pc's own sign-in first; it shows in the chip
+        accs = await pg.evaluate("""(() => { const card = [...ck.cards.values()].find((c) => c.meta.draft); if (!card || !ckAccounts(card).length) return null;
+          card.pick = { ...card.pick, agent: 'claude', account: '' }; delete card.picks.dataset.sig; ckPicker(card);
+          document.querySelector('#ck-canvas details.ck-model').open = true;
+          const b = [...document.querySelectorAll('#ck-canvas .ck-account button')], names = b.map((x) => x.textContent);
+          b[1]?.click(); return [names, document.querySelector('#ck-canvas .ck-model summary').textContent, card.pick.account]; })()""")
+        if accs:
+            check(accs[0][0] == "own" and len(accs[0]) >= 2 and accs[2] == accs[0][1] and accs[1].endswith(accs[0][1]), f"model chip: Account row, own first, the pick in the chip {accs}")
+            await pg.mouse.click(5, 5)
     else:
         print("skip: no pc reports its models: the model chip is not checked")
     await route(pg, "#/chats?view=list", "#ck-history li")
@@ -831,6 +840,11 @@ async def shell(browser, devices, secret: str) -> None:
     yolo = await pg.evaluate("""() => ({switches: document.querySelectorAll('.mx-c .yolo-switch input[role=switch]').length,
         heads: document.querySelectorAll('.mx-head .mx-pc').length, more: document.querySelectorAll('.mx-pc-acts .machine-more').length,
         forget: [...document.querySelectorAll('#machines .mx-c button')].some(b => /Forget/.test(b.textContent) && !b.closest('.menu-list'))})""")
+    acc = await pg.evaluate("""[[...document.querySelectorAll('#machines .mx-account')].map((x) => x.textContent),
+        [...document.querySelectorAll('#machines .mx-account a.btn')].map((a) => a.href)]""")
+    if any("work" in a for a in acc[0]):  # the seeded pc (ui_ci): own sign-in, a token account, one waiting for its code
+        check(acc[0][0].startswith("own") and any("long-lived token" in a for a in acc[0]) and acc[1] == ["https://claude.com/cai/oauth/authorize?code=true"],
+              f"Machines: Claude accounts with the sign-in link of the one that waits {acc}")
     if yolo["switches"]:
         check(yolo["heads"] >= 1 and yolo["more"] >= 1 and not yolo["forget"], f"Machines: YOLO is a switch per agent, pc actions in its column head, Forget behind More {yolo}")
         most = await pg.evaluate("""() => { const n = document.querySelector('.mx-head input[type=number][aria-label^="Agents at once"]'); if (!n) return null;

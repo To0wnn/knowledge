@@ -974,7 +974,8 @@ function ckCard(meta) {
       }
       else {
         // only a choice made here: a saved model the pc no longer lists must not turn into Default unasked
-        const pick = card.pick?.touched ? { model: card.pick.id, effort: card.pick.effort, ...(card.pick.agent !== card.meta.agent ? { agent: card.pick.agent } : {}) } : {};
+        const pick = card.pick?.touched ? { model: card.pick.id, effort: card.pick.effort, ...(card.pick.agent !== card.meta.agent ? { agent: card.pick.agent } : {}),
+          ...(card.pick.agent === "claude" ? { account: card.pick.account || "" } : {}) } : {};
         // mode: Send into the turn (a live agent) or after it (others); Queue or Force from their buttons
         await api("/ui/api/chat/send", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ machine: card.meta.machine, id: card.meta.id, text, mode, ...pick }) });
         Object.assign(card.meta, pick); card.pick = null;
@@ -1270,6 +1271,8 @@ function ckCatalog(pcs) { // one entry per agent and model: [{agent, id, name, e
 }
 const levels = (m) => CK_EFFORTS.filter((e) => (m.efforts || []).includes(e));
 const ckModelOf = (card) => (card.catalog || []).find((x) => x.agent === card.pick?.agent && x.id === card.pick?.id);
+// The extra Claude accounts on the chat's pc (Machines > Claude Code > Accounts); a draft's pc follows its folder.
+const ckAccounts = (card) => (ckPc(card.meta.draft ? (card.where_ || "").split("\n")[0] : card.meta.machine)?.agents?.claude?.accounts || []).filter((a) => a.id);
 function ckPicker(card) {
   const draft = card.meta.draft, mine = ckPc(card.meta.machine);
   card.catalog = ckCatalog(draft ? ckDraftPcs() : mine ? [mine] : []);
@@ -1278,26 +1281,28 @@ function ckPicker(card) {
     const last = JSON.parse(store.get("kn_chat_pick") || "null"), pref = me.prefs?.chat_default;
     const offered = (x) => x && card.catalog.some((y) => y.agent === x.agent && y.id === x.id);
     const saved = draft ? (offered(pref) ? pref : last) // Settings, else (or when no pc online runs it) the last one used
-      : { agent: card.meta.agent, id: card.meta.model || "", effort: card.meta.effort || "" };
+      : { agent: card.meta.agent, id: card.meta.model || "", effort: card.meta.effort || "", account: card.meta.account || "" };
     const hit = saved && card.catalog.find((x) => x.agent === saved.agent && x.id === saved.id);
     const ok = hit || (!draft && saved.id === ""), first = draft ? card.catalog.find((x) => x.agent === "claude") || card.catalog[0] : null;
     card.pick = ok ? { ...saved, effort: !hit || levels(hit).includes(saved.effort) ? saved.effort : hit.default || "" }
       : first ? { agent: first.agent, id: first.id, effort: first.default || "" }
       : draft ? null : { agent: card.meta.agent, id: "", effort: "" }; // a model the pc no longer lists: the agent's own, never another agent's
   }
-  const sig = JSON.stringify([card.catalog.map((x) => [x.agent, x.id, x.efforts, x.default, x.pcs]), card.pick, card.meta.agent, draft && agentProject]);
+  const accounts = card.pick?.agent === "claude" ? ckAccounts(card) : [];
+  if (card.pick?.account && !accounts.some((a) => a.id === card.pick.account)) card.pick = { ...card.pick, account: "" }; // gone from that pc
+  const sig = JSON.stringify([card.catalog.map((x) => [x.agent, x.id, x.efforts, x.default, x.pcs]), card.pick, card.meta.agent, draft && agentProject, accounts.map((a) => a.id)]);
   if (card.picks.dataset.sig === sig) return; // unchanged: a poll must not close an open panel
   card.picks.dataset.sig = sig;
   card.picks.hidden = !card.pick;
   if (!card.pick) return card.picks.replaceChildren();
   const x = ckModelOf(card), menu = el("details", "menu up ck-model"), sum = el("summary", "btn small");
-  sum.textContent = `${x ? x.name : `${AGENT_NAME[card.pick.agent] || card.pick.agent} default`}${card.pick.effort ? ` · ${card.pick.effort}` : ""}`; // ▾ from .menu
+  sum.textContent = `${x ? x.name : `${AGENT_NAME[card.pick.agent] || card.pick.agent} default`}${card.pick.effort ? ` · ${card.pick.effort}` : ""}${card.pick.account ? ` · ${card.pick.account}` : ""}`; // ▾ from .menu
   sum.title = `Model and effort from the next turn on (${AGENT_NAME[card.pick.agent] || card.pick.agent})`;
   const panel = el("div", "menu-list ck-model-list");
   if (card.catalog.some((m) => m.agent === card.pick.agent && m.id)) { // back to what the agent itself would pick
     const own = el("button", "ck-mopt ck-own", `${AGENT_NAME[card.pick.agent] || card.pick.agent}'s own model`); own.type = "button";
     own.setAttribute("aria-pressed", String(!card.pick.id));
-    own.onclick = (e) => { e.stopPropagation(); card.pick = { agent: card.pick.agent, id: "", effort: "", touched: true }; ckPicker(card); ckDraftWhere(card); };
+    own.onclick = (e) => { e.stopPropagation(); card.pick = { agent: card.pick.agent, id: "", effort: "", account: card.pick.account || "", touched: true }; ckPicker(card); ckDraftWhere(card); };
     panel.append(own);
   }
   const fams = [...new Set(card.catalog.map((m) => ckFamily(m.id)))];
@@ -1311,7 +1316,7 @@ function ckPicker(card) {
       b.title = other ? `${AGENT_NAME[m.agent] || m.agent}: continue this chat there (it gets the chat so far and starts its own session)` : m.id;
       b.onclick = (e) => {
         e.stopPropagation(); // the chip is rebuilt: the outside-click listener would see a detached button and close it
-        card.pick = { agent: m.agent, id: m.id, effort: m.default || "", touched: true }; ckPicker(card); ckDraftWhere(card);
+        card.pick = { agent: m.agent, id: m.id, effort: m.default || "", account: m.agent === "claude" ? card.pick?.account || "" : "", touched: true }; ckPicker(card); ckDraftWhere(card);
         const again = card.picks.querySelector("details.ck-model"); if (again && levels(m).length) again.open = true; // then the effort
       };
       opts.append(b);
@@ -1326,6 +1331,18 @@ function ckPicker(card) {
       b.title = e ? `${e}${e === x.default ? " (this model's default)" : ""}` : "The agent's own setting";
       b.setAttribute("aria-pressed", String(card.pick.effort === e));
       b.onclick = () => { card.pick = { ...card.pick, effort: e, touched: true }; menu.open = false; ckPicker(card); card.input.focus(); };
+      seg.append(b);
+    }
+    panel.append(row);
+  }
+  if (accounts.length) { // which Claude account it runs under, from the next turn on
+    const row = el("div", "ck-mrow ck-account"), seg = el("div", "seg");
+    row.append(el("span", "ck-mfam", "Account"), seg);
+    for (const a of [{ id: "" }, ...accounts]) {
+      const b = el("button", null, a.id || "own"); b.type = "button";
+      b.title = a.id ? `${a.email || (a.kind === "token" ? "long-lived token" : "not signed in")}${usageWindows(a).length ? ` · ${usageText(a)}` : ""}` : "The pc's own Claude sign-in";
+      b.setAttribute("aria-pressed", String((card.pick.account || "") === a.id));
+      b.onclick = (e) => { e.stopPropagation(); card.pick = { ...card.pick, account: a.id, touched: true }; ckPicker(card); };
       seg.append(b);
     }
     panel.append(row);
@@ -1369,7 +1386,7 @@ function ckDraftFolder(card) {
   const want = card.where_ || (card.pick?.folder ? `${card.pick.machine}\n${card.pick.folder}` : "");
   if ([...sel.options].some((o) => o.value === want)) sel.value = want;
   card.where_ = sel.value;
-  sel.onchange = () => { card.where_ = sel.value; ckDraftWhere(card); };
+  sel.onchange = () => { card.where_ = sel.value; ckDraftWhere(card); delete card.picks.dataset.sig; ckPicker(card); }; // another pc: its own accounts
   sel.hidden = list.length < 2; // one place: nothing to pick, the header says where
   return sel;
 }
@@ -1407,11 +1424,11 @@ async function ckStart(card, text) { // the draft's first message: make the chat
     const m = ckPc(machine);
     let failed = "";
     try {
-      await api("/ui/api/chat/send", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ machine, id: res.chat.id, text, model: p.id, effort: p.effort }) });
+      await api("/ui/api/chat/send", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ machine, id: res.chat.id, text, model: p.id, effort: p.effort, ...(p.account ? { account: p.account } : {}) }) });
       store.set("kn_chat_pick", JSON.stringify({ agent: p.agent, id: p.id, effort: p.effort, machine, folder }));
     } catch (err) { failed = err.message; } // the chat exists now: go there with the text kept, never make another
     card.input.value = ""; ckDraftKeep(card); ckDrop(ckKey(CK_DRAFT)); ck.summaryAt = 0;
-    const chat = ckCard({ ...res.chat, ...(failed ? {} : { model: p.id, effort: p.effort, status: "queued" }), machine, label: m?.label || machine, online: true });
+    const chat = ckCard({ ...res.chat, ...(failed ? {} : { model: p.id, effort: p.effort, account: p.account || "", status: "queued" }), machine, label: m?.label || machine, online: true });
     if (failed) { chat.input.value = text; ckDraftKeep(chat); chat.note.className = "ck-note bad"; chat.note.textContent = failed; }
     if (bdOn()) { // on the grid the chat stays a card there; the next summary brings it from the server
       const raised = Date.now() / 1000; // your own new chat is the one move that is not held

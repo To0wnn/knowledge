@@ -750,9 +750,27 @@ def machines_contract(tmp, ck, fr, raw, er, et, heard):
     m = {r["id"]: r for r in json.loads(raw("GET", "/ui/api/machines", headers=ck)[2])["machines"]}["cccccccccccccccc"]
     assert [(a["status"], a.get("result")) for a in m["actions"]][0] == ("done", "on"), m["actions"]
     assert "machine-action" in "\n".join(json.loads(raw("GET", "/ui/api/admin", headers=ck)[2])["system"]["audit"])
+    # An extra Claude account: a sign-in code or long-lived token reaches the pc once and is never kept, shown or logged.
+    assert act({"action": "claude_login", "args": {"account": "../x"}})[0] == 400
+    assert act({"action": "claude_token", "args": {"account": "werk", "token": "sk-ant-api03-" + "x" * 30}})[0] == 400
+    assert act({"action": "claude_code", "args": {"account": "werk", "code": "a b"}})[0] == 400
+    sign_tok, sign_code = "sk-ant-oat01-" + "q" * 40, "abcdefgh#ijklmnop"
+    assert act({"action": "claude_token", "args": {"account": "werk", "token": sign_tok}})[0] == 200
+    assert act({"action": "claude_code", "args": {"account": "werk", "code": sign_code}})[0] == 200
+    shown = raw("GET", "/ui/api/machines", headers=ck)[2] + raw("GET", "/ui/api/admin", headers=ck)[2]
+    assert sign_tok.encode() not in shown and sign_code.encode() not in shown, "never shown on the page or in the audit log"
+    got = json.loads(http("GET", "/machine/actions", token=fr, headers=pc)[1])["actions"]
+    assert [a["args"] for a in got] == [{"account": "werk", "token": sign_tok}, {"account": "werk", "code": sign_code}], got
+    assert sign_tok not in ((tmp / "machine_actions.json").read_text() + (tmp / "audit.log").read_text()), "handed out: gone from the queue file, never in the audit log"
+    for a in got:
+        http("POST", "/machine/actions/result", {"id": a["id"], "ok": True, "result": "ok"}, token=fr, headers=pc)
     # The companion's report: YOLO, limit, workers; a task that waits for a usage limit is told once.
     rep = {"version": "0.15.0", "workersAllowed": True, "maxAgents": 700, "game": "",
-           "agents": {"codex": {"yolo": True, "trusted": True, "limit": 91.5, "windows": [[91.5, "5h", 2e9], [20, "7d", None], ["x", 1, 2], [True, "b", 1]]}, "claude": {"yolo": False, "trusted": False, "limit": None}},
+           "agents": {"codex": {"yolo": True, "trusted": True, "limit": 91.5, "windows": [[91.5, "5h", 2e9], [20, "7d", None], ["x", 1, 2], [True, "b", 1]]},
+                      "claude": {"yolo": False, "trusted": False, "limit": None, "accounts": [
+                          {"id": "", "email": "me@example.org", "plan": "max_5x"}, {"id": "../x"}, "junk",
+                          {"id": "werk", "kind": "evil", "login": "https://evil.example/oauth/authorize?x", "windows": [[40, "5h", 2e9], ["x"]]},
+                          {"id": "thuis", "kind": "login", "login": "https://claude.com/cai/oauth/authorize?code=true"}]}},
            "workers": [{"id": "MC-1", "project": "garden", "agent": "codex", "status": "running", "started": time.time() - 240,
                         "branch": "task/MC-1", "yolo": True, "open": "tail -f x.log"}], "limitWait": ["MC-2"],
            "folders": {"linked": [{"path": "/home/x/garden", "project": "garden"}]}, "waiting": {"garden/MC-3": "Codex runs 2 worker(s) already"}}
@@ -763,6 +781,9 @@ def machines_contract(tmp, ck, fr, raw, er, et, heard):
     assert m["online"] and cx["yolo"] and cx["limit"] == 91.5 and cx["workers"][0]["id"] == "MC-1" and m["companion"]["workersAllowed"] and m["companion"]["maxAgents"] == 700, m
     assert m["agents"]["claude"]["trusted"] is False and m["agents"]["claude"]["limit"] is None and m["agents"]["claude"]["windows"] == []
     assert cx["windows"] == [[91.5, "5h", 2e9], [20.0, "7d", None]], cx["windows"]  # malformed windows dropped
+    accs = m["agents"]["claude"]["accounts"]
+    assert [(a["id"], a["kind"], a.get("login", "")) for a in accs] == [("", "", ""), ("werk", "", ""), ("thuis", "login", "https://claude.com/cai/oauth/authorize?code=true")], accs
+    assert accs[0]["email"] == "me@example.org" and accs[1]["windows"] == [[40.0, "5h", 2e9]], accs
     # CPU/GPU/RAM/VRAM over 24 h: numbers kept, junk and unknown metrics dropped, the series capped at 144 points
     stats = {"bucket": 600, "total": {"ram": 16000, "evil": 1}, "cpu": {"min": 1, "max": 90, "avg": 20.5, "now": 7, "series": [None, 5, "x", True] + [1] * 200, "hour": [3] * 99, "windows": {"1h": [1, 9, 4], "6h": [1, 2], "evil": [1, 2, 3]}},
              "gpu": {"now": "hot", "series": []}, "disk": {"now": 1, "series": [1]}}
@@ -1035,7 +1056,7 @@ def chats_contract(tmp, ck, fr, raw, er, et):
     # that sends neither keeps them.
     mrep = {"version": "0.21.1", "agents": {"codex": {}, "claude": {"models": [
         {"id": "opus", "name": "Opus", "efforts": ["low", "max", "huge"], "default": "max"}, {"id": "-rf", "efforts": []},
-        {"id": "sonnet-x", "efforts": ["low"], "default": "max"}]}},
+        {"id": "sonnet-x", "efforts": ["low"], "default": "max"}], "accounts": [{"id": ""}, {"id": "werk", "kind": "token"}]}},
         "folders": {"linked": [{"path": "/home/x/garden", "project": "garden"}]}}
     http("POST", "/machine/report", mrep, token=fr, headers=pc)
     mc = json.loads(ui("/ui/api/chats", {"machine": mid, "agent": "claude", "folder": "/home/x/garden"})[2])["chat"]["id"]
@@ -1145,6 +1166,13 @@ def chats_contract(tmp, ck, fr, raw, er, et):
     assert [(x["model"], x["effort"]) for x in w] == [("", "low")], w
     http("POST", "/machine/chats/events", {"chat": mc, "events": [], "done": True}, token=fr, headers=pc)
     assert ui("/ui/api/chat/send", {"machine": mid, "id": mc, "text": "d", "effort": "max"}, er)[0] == 403
+    # An extra Claude account: only one the pc reported; it holds for the chat until changed, "" is the pc's own.
+    acc_work = lambda: [x["account"] for x in json.loads(http("GET", "/machine/chats", token=fr, headers=pc)[1])["work"] if x["chat"] == mc]
+    assert ui("/ui/api/chat/send", {"machine": mid, "id": mc, "text": "e", "account": "thuis"})[0] == 400
+    for body, want in (({"account": "werk"}, "werk"), ({}, "werk"), ({"account": ""}, "")):
+        assert ui("/ui/api/chat/send", {"machine": mid, "id": mc, "text": "e", **body})[0] == 200
+        assert acc_work() == [want], (body, want)
+        http("POST", "/machine/chats/events", {"chat": mc, "events": [], "done": True}, token=fr, headers=pc)
     # Subagents: a "sub" event opens one (the chat and its board card count it while it runs), its tool lines carry
     # its id, its end closes it; an id with odd characters is dropped; the turn's end closes what is left.
     assert ui("/ui/api/chat/send", {"machine": mid, "id": mc, "text": "use a subagent"})[0] == 200

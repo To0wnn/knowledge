@@ -3284,9 +3284,11 @@ def machine_rows() -> list[dict]:
                                    "current": {a: v.get("current", {}) for a, v in (comp.get("agents") or {}).items()}} if comp else None,
                      **({"advice": model_advice({a: v.get("models", []) for a, v in comp["agents"].items()}, advice, chosen)}
                         if advice and comp and comp.get("agents") else {}),
-                     "actions": queue.get(mid, [])[-10:]})
+                     "actions": [{**x, "args": hide_secrets(x.get("args") or {})} for x in queue.get(mid, [])[-10:]]})
         if rows[-1]["companion"] and not rows[-1]["own"]:  # a raw command that waits is its owner's, also for an admin
             rows[-1]["companion"].pop("asks", None)
+        if not rows[-1]["own"] and "claude" in agents:  # who is signed in there, and a sign-in link, are its owner's only
+            agents["claude"].pop("accounts", None)
         if rows[-1]["mine"]:  # whom its owner shared it with, per project (Machines: Share)
             rows[-1]["shares"] = (all_shares.get(mid) or {}).get("projects", {})
     for n, cfg in tokens.items():  # plugins before 0.15.0: one row per token, from clients.json
@@ -6529,6 +6531,36 @@ async def ui_machine_share(request: Request, body: dict):
     return JSONResponse({"ok": True})
 
 
+CLAUDE_ACCOUNT = re.compile(r"[a-z0-9][a-z0-9-]{0,30}")  # = plugin accounts.py ID
+SECRET_ARGS = ("token", "code")  # a sign-in in an action: handed to the pc once, never kept, shown or logged
+
+
+def hide_secrets(args: dict) -> dict:
+    return {k: "(hidden)" if k in SECRET_ARGS else v for k, v in args.items()}
+
+
+def report_accounts(v) -> list:
+    """The Claude accounts a pc reported (accounts.py listing): the default one ("" id) and its extra ones."""
+    out = []
+    for a in (v if isinstance(v, list) else [])[:10]:
+        if not isinstance(a, dict) or not (a.get("id") == "" or CLAUDE_ACCOUNT.fullmatch(str(a.get("id", "")))):
+            continue
+        login = str(a.get("login") or "")
+        out.append({"id": a["id"], "email": str(a.get("email") or "")[:120], "plan": str(a.get("plan") or "")[:40],
+                    "kind": a["kind"] if a.get("kind") in ("login", "token") else "", "error": str(a.get("error") or "")[:300],
+                    # the sign-in page of Claude Code's own OAuth: opened by the owner's browser
+                    **({"login": login} if login.startswith(("https://claude.com/", "https://claude.ai/")) and len(login) < 2000 else {}),
+                    "windows": report_windows(a.get("windows"))})
+    return out
+
+
+def report_windows(v) -> list:
+    """Usage windows as a pc reported them: [percent, name, resets_at], at most 6."""
+    return [[float(w[0]), str(w[1])[:40], float(w[2]) if isinstance(w[2], (int, float)) else None]
+            for w in (v or [])[:6] if isinstance(w, list) and len(w) == 3
+            and isinstance(w[0], (int, float)) and not isinstance(w[0], bool)] if isinstance(v, list) else []
+
+
 def action_args(action: str, args: dict) -> dict:
     """The fixed remote actions and their arguments, checked; anything else raises ValueError. No free text reaches a
     pc: the companion runs each of these with its own code."""
@@ -6549,6 +6581,19 @@ def action_args(action: str, args: dict) -> dict:
                 **({"undo": True} if chat and action == "rollback" and args.get("undo") is True else {})}
     if action == "trust_hooks":
         return {"agent": agent()}
+    if action in ("claude_login", "claude_code", "claude_token", "claude_remove"):  # an extra Claude account on the pc (accounts.py)
+        if not CLAUDE_ACCOUNT.fullmatch(str(args.get("account", ""))):
+            raise ValueError("account must be a name of a-z, 0-9 and -, at most 31 characters")
+        out = {"account": args["account"]}
+        if action == "claude_code":  # what claude.com shows after signing in; it only works with that pc's own sign-in run
+            if not re.fullmatch(r"[\w#.~-]{8,512}", str(args.get("code", "")).strip()):
+                raise ValueError("paste the whole code the sign-in page shows")
+            out["code"] = str(args["code"]).strip()
+        if action == "claude_token":
+            if not re.fullmatch(r"sk-ant-oat\d\d-[\w-]{20,400}", str(args.get("token", "")).strip()):
+                raise ValueError("paste the token claude setup-token printed (sk-ant-oat01-...)")
+            out["token"] = str(args["token"]).strip()
+        return out
     if action in ("install_tool", "remove_tool", "tool_auto"):  # an id only: the steps ship with the pc's own plugin (plugin/tools)
         if not re.fullmatch(r"[a-z0-9][a-z0-9-]{0,39}", str(args.get("tool", ""))):
             raise ValueError("tool must be a tool id")
@@ -6648,11 +6693,13 @@ async def ui_machine_action(request: Request):
         tf = CHATS_DIR / mid / "takeover.json"
         tf.parent.mkdir(parents=True, exist_ok=True)
         await asyncio.to_thread(update_state, tf, lambda d: d.__setitem__(key, pending))
+    if any(k in args for k in SECRET_ARGS) and not row["online"]:  # it would wait in the queue file until the pc comes back
+        return JSONResponse({"error": f"{row['label']} is offline: sign in once it is online"}, status_code=409)
     item = {"id": secrets.token_hex(6), "action": action, "args": args, "by": dev.get("user", ""), "at": time.time(),
             "status": "waiting", "tokens": by_owner or [n for n in row["tokens"] if steer(n)]}  # a guest's row lists no tokens
     await asyncio.to_thread(update_state, MACHINE_ACTIONS, lambda d: d.__setitem__(mid, (d.get(mid, []) + [item])[-50:]))
     wake_machine(mid)
-    audit("machine-action", f"{mid} {action} {json.dumps(args)}")
+    audit("machine-action", f"{mid} {action} {json.dumps(hide_secrets(args))}")
     return JSONResponse({"ok": True, "id": item["id"]})
 
 
@@ -6685,6 +6732,7 @@ async def machine_actions_route(request: Request):
         for a in mine(d):
             a["status"] = "running"
             out.append({k: a[k] for k in ("id", "action", "args", "by", "at")})
+            a["args"] = hide_secrets(a["args"])  # handed out: the pc has it, the queue file no longer
     await asyncio.to_thread(mark_machine, dev)
     end, wake = time.time() + wait, MACHINE_WAKE.setdefault(dev["machine"], asyncio.Event())
     live = lambda: LIVE_WANTED["until"] > time.time()  # noqa: E731
@@ -7233,7 +7281,7 @@ def chat_meta(c: dict) -> dict:
             "sub_list": sub_list(c),
             "used": c.get("used", 0), "ctx": c.get("ctx", 0),  # the conversation's tokens so far, its context now
             "used_by": {a: n for a, n in (c.get("used_by") or {}).items() if a != c.get("agent") and n},  # other agents this chat ran in
-            "model": c.get("model", ""), "effort": c.get("effort", ""), "worktree": bool(c.get("worktree")), "bg": int(c.get("bg") or 0), "bg_list": c.get("bg_list") or [],
+            "model": c.get("model", ""), "effort": c.get("effort", ""), "account": c.get("account", ""), "worktree": bool(c.get("worktree")), "bg": int(c.get("bg") or 0), "bg_list": c.get("bg_list") or [],
             "rolled_back": bool(c.get("rolled_back")),  # its worktree was rolled back and no message went since: Undo
             "waiting": len(c.get("pending") or [])}
 
@@ -8088,6 +8136,11 @@ async def ui_chat_send(request: Request):
         pick = {}
         if "model" in b or "effort" in b or agent != c["agent"]:  # an older page sends neither: the chat keeps what it had
             pick = dict(zip(("model", "effort"), chat_choice(row, agent, str(b.get("model") or ""), str(b.get("effort") or ""))))
+        if "account" in b:  # an extra Claude account on that pc ("" = its own); from this turn on
+            acc = str(b.get("account") or "")
+            if acc and not (agent == "claude" and any(x["id"] == acc for x in ((row.get("agents") or {}).get("claude") or {}).get("accounts") or [])):
+                raise ValueError(f"{acc} is not a Claude account on {row['label']}")
+            pick["account"] = acc
     except (ValueError, AttributeError, TypeError, PermissionError) as e:
         return chat_error(e)
     if not row["online"]:
@@ -8698,7 +8751,7 @@ async def machine_chats(request: Request):
                 for m in e.pop("live", []):  # a live chat's message while it works: into its running agent (now or force)
                     m = signed(c, m)
                     out["work"].append({"chat": cid, "agent": c["agent"], "folder": c["folder"], "session": c.get("session", ""),
-                                        "model": c.get("model", ""), "effort": c.get("effort", ""), "allow": c.get("allow", []),
+                                        "model": c.get("model", ""), "effort": c.get("effort", ""), "allow": c.get("allow", []), "account": c.get("account", ""),
                                         **({"worktree": True} if c.get("worktree") else {}), **extra, **m})
                 if e.get("steer"):  # Force: once to the companion, which parks it for the running turn's hook
                     s = e.pop("steer")
@@ -8712,7 +8765,7 @@ async def machine_chats(request: Request):
                     # the start context asks too, but a session without the plugin's start hook never sees it
                     msg = {**msg, "text": (msg.get("text") or "") + CHAT_TITLE_ASK.format(chat=cid)}
                 out["work"].append({"chat": cid, "agent": c["agent"], "folder": c["folder"], "session": c.get("session", ""),
-                                    "model": c.get("model", ""), "effort": c.get("effort", ""),
+                                    "model": c.get("model", ""), "effort": c.get("effort", ""), "account": c.get("account", ""),
                                     "allow": c.get("allow", []), **({"worktree": True} if c.get("worktree") else {}),
                                     **({"git": True} if c.get("close_after") else {}), **extra, **msg})
                 e["busy"] = True
@@ -9295,9 +9348,8 @@ async def machine_report(request: Request):
                                  "limit": float(v["limit"]) if isinstance(v.get("limit"), (int, float)) else None,
                                  "resets": float(v["resets"]) if isinstance(v.get("resets"), (int, float)) else None,
                                  # each usage window (5h, 7d; agy per quota pool): [percent, name, resets_at]
-                                 "windows": [[float(w[0]), str(w[1])[:40], float(w[2]) if isinstance(w[2], (int, float)) else None]
-                                             for w in (v.get("windows") or [])[:6] if isinstance(w, list) and len(w) == 3
-                                             and isinstance(w[0], (int, float)) and not isinstance(w[0], bool)] if isinstance(v.get("windows"), list) else [],
+                                 "windows": report_windows(v.get("windows")),
+                                 **({"accounts": report_accounts(v["accounts"])} if a == "claude" and "accounts" in v else {}),
                                  # the installed plugin, read from disk by the companion: shown before the agent's first session
                                  **({"plugin": v["plugin"][:20]} if isinstance(v.get("plugin"), str) and re.fullmatch(r"[\w.+-]{1,20}", v["plugin"]) else {}),
                                  # the agent program's own version and (Claude Code) its update channel: Machines shows what an update gets

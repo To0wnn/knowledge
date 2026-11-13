@@ -51,7 +51,7 @@ jobs:
         run: |
           uv python install 3.9
           py=$(uv python find 3.9); "$py" --version
-          for t in limits secret-guard companion workers chat watch tools admin; do "$py" "../plugin/hooks/$t.py" --self-test; done
+          for t in limits secret-guard accounts companion workers chat watch tools admin; do "$py" "../plugin/hooks/$t.py" --self-test; done
           "$py" ../clients/knowledge-agent.py --selftest
   e2e:
     strategy:
@@ -79,7 +79,7 @@ jobs:
       - name: Plugin self-tests on this OS
         shell: bash  # the same line on Windows, macOS and Linux (Windows: file locks, CRLF, process groups differ)
         run: |
-          for t in plugin/hooks/chat.py plugin/hooks/companion.py plugin/hooks/workers.py plugin/hooks/tools.py plugin/hooks/admin.py; do uv run --project server --frozen python "$t" --self-test; done
+          for t in plugin/hooks/accounts.py plugin/hooks/chat.py plugin/hooks/companion.py plugin/hooks/workers.py plugin/hooks/tools.py plugin/hooks/admin.py; do uv run --project server --frozen python "$t" --self-test; done
           uv run --project server --frozen python clients/knowledge-agent.py --selftest
       - name: Client end-to-end
         run: uv run --project server --frozen python tests/clients_e2e.py

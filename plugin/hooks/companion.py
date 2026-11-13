@@ -47,6 +47,7 @@ from pathlib import Path
 HOOKS = Path(__file__).resolve().parent
 sys.path.insert(0, str(HOOKS))
 import model_settings  # noqa: E402  (next to this file)
+import accounts  # noqa: E402  (extra Claude accounts, signed in from the web UI)
 import admin as admin_rights  # noqa: E402  (admin rights for chats, switched on once per pc)
 import agent_hooks  # noqa: E402  (the wake code and the session registry)
 import awake  # noqa: E402  (no idle sleep while an agent works)
@@ -1039,6 +1040,15 @@ def kept_windows(f: Path, now: float) -> list:
         return []
 
 
+def claude_accounts(now: float) -> list:
+    """The Claude accounts on this pc for the Machines list (accounts.py); [] when they cannot be read now."""
+    try:
+        return accounts.listing(kept_windows, now)
+    except Exception as e:  # the report goes on without them
+        log("error", "Could not read the Claude accounts", f"{type(e).__name__}: {e}"[:300])
+        return []
+
+
 def kept_agy(f: Path, now: float) -> list:
     """agy's kept "<group> 5h|7d" windows; one that reset shows 0% until a new reading: using agy again renews the
     token the cloud call needs (on a pc without a keyring `agy models` does not), so no reading means no use since.
@@ -1866,6 +1876,7 @@ def report(tok: str, ws: dict, lim: dict, wait: list, now: float, waiting=None, 
             "agents": {a: {"yolo": bool(yolo.get(a, {}).get("on")), "trusted": not untrusted(a, folders), "limit": lim.get(a),
                      "resets": (resets or {}).get(a), "windows": (windows or {}).get(a, []), **({"plugin": v} if (v := plugin_version(a)) else {}),  # known before a session
                      **({"cli": v} if (v := cli_version(a, now)) else {}), **({"channel": claude_channel()} if a == "claude" else {}),
+                     **({"accounts": claude_accounts(now)} if a == "claude" else {}),
                      "models": chat.models(a),  # what a chat may pick (cached for hours)
                      # the slash commands its last live chat here offered: long, so only when changed (the server keeps them)
                      **({"commands": c} if (c := chat.commands(a)) != _COMMANDS_SENT.get(a, (0, None))[1] or now - _COMMANDS_SENT[a][0] > 6 * 3600 else {}),
@@ -2144,6 +2155,15 @@ def run_action(a: dict) -> str:
             raise ValueError(f"no tool {tid} in this plugin version: update the plugin")
         set_tool(tid, auto=args.get("on") is True)
         return f"{tools.catalog()[tid]['name']}: daily update {'on' if args.get('on') is True else 'off'}"
+    if act == "claude_login":  # the sign-in link goes to the page with the next report
+        accounts.login(str(args.get("account", "")))
+        return f"{args.get('account')}: open the sign-in link under Machines, then paste the code there"
+    if act == "claude_code":
+        return accounts.code(str(args.get("account", "")), str(args.get("code", "")))
+    if act == "claude_token":
+        return accounts.set_token(str(args.get("account", "")), str(args.get("token", "")))
+    if act == "claude_remove":
+        return accounts.remove(str(args.get("account", "")))
     if act == "trust_hooks":
         return trust(agent)
     if act == "link_folder":
@@ -2311,7 +2331,8 @@ def actions_round():
         threading.Thread(target=file_request, args=(tok, f), daemon=True).start()
     for a in got.get("actions", []):
         changed = changed or a.get("action") in STATE_ACTIONS
-        log("remote", f"Remote action {a.get('action')} from {a.get('by') or '?'}", json.dumps(a.get("args") or {})[:200])
+        shown = {k: "(hidden)" if k in ("token", "code") else v for k, v in (a.get("args") or {}).items()}  # a sign-in never in the log
+        log("remote", f"Remote action {a.get('action')} from {a.get('by') or '?'}", json.dumps(shown)[:200])
         try:
             with ACTING:
                 ok, result = True, run_action(a)
@@ -2343,7 +2364,7 @@ def live_loop():
         time.sleep(LIVE_EVERY)
 
 
-STATE_ACTIONS = {"install_tool", "remove_tool", "tool_auto", "yolo", "admin", "workers_allowed", "max_agents", "link_folder", "unlink_folder", "trust_hooks", "stop_worker", "restart", "merge", "takeover", "archive_worker", "apply_models"}
+STATE_ACTIONS = {"claude_login", "claude_code", "claude_token", "claude_remove", "install_tool", "remove_tool", "tool_auto", "yolo", "admin", "workers_allowed", "max_agents", "link_folder", "unlink_folder", "trust_hooks", "stop_worker", "restart", "merge", "takeover", "archive_worker", "apply_models"}
 
 
 # ---------------------------------------------------------------- the page

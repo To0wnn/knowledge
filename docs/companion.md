@@ -227,6 +227,30 @@ fixed remote actions and relays chats. Installing it is part of the client setup
 - **The risk, said in the UI:** UAC is no security boundary and NOPASSWD sudo makes the user root, so while admin is on
   every program of that user can become administrator, not only the agents. Uninstalling the companion switches it off.
 
+## Claude accounts per pc
+
+- **More than one Claude account on a pc** (`plugin/hooks/accounts.py`): Machines > Claude Code > Accounts lists the
+  pc's own sign-in and each extra account, with its plan and the usage of its chat turns. Add account… takes a name
+  (a-z, 0-9, -) and one of two ways in:
+  - **Sign in with the browser:** the companion runs `claude auth login` in the account's folder; its sign-in link shows
+    in the row (Open sign-in). After signing in, claude.com shows a code; Paste code… sends it to that waiting run (it
+    only works with that run's own PKCE verifier; the run ends after 15 minutes).
+  - **Long-lived token:** `claude setup-token` in a terminal on any pc (it needs a terminal, so the companion cannot run
+    it), the token pasted. It is kept in the account's folder (owner only) and given to a chat as
+    `CLAUDE_CODE_OAUTH_TOKEN`, which Claude Code prefers over a stored sign-in.
+- **How a chat uses it:** the model chip of a Claude chat gets an Account row (own first) when the pc has extra
+  accounts; the choice holds for the chat from the next turn on (`account` in the chat, checked against what the pc
+  reported). The companion then starts Claude with `CLAUDE_CONFIG_DIR=~/.knowledge/claude-accounts/<name>`. That folder
+  links everything of `~/.claude` (settings, plugins, skills, CLAUDE.md, `projects/` with the sessions), so the chat keeps
+  its plugin and resumes its session after a switch; only the sign-in (`.credentials.json`, the Keychain on macOS),
+  `.claude.json` and Claude's daemon are its own. On Windows folders are junctions and files copies refreshed before
+  each run. The plugin's secret options (the knowledge token on a pc without a keyring) are copied into its sign-in once.
+- **Secrets on the server:** a code or token travels as a fixed remote action, refused while the pc is offline, handed
+  to the pc once and then replaced by "(hidden)" in the queue; it never shows on the page, in the audit log or in the
+  companion's activity.
+- **Not (yet):** workers run under the pc's own account; the usage chip and the worker cap follow the pc's own account;
+  Codex and agy accounts are not covered.
+
 ## Hook failures
 
 - **Hook failures:** when one of the plugin's own hooks crashes or exits with an error, the device keeps it in

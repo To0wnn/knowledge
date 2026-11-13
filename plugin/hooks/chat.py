@@ -34,6 +34,7 @@ from pathlib import Path
 HOOKS = Path(__file__).resolve().parent
 sys.path.insert(0, str(HOOKS))
 import workers  # noqa: E402
+import accounts  # noqa: E402
 import admin as admin_rights  # noqa: E402
 
 RUNNING: dict = {}  # chat id -> {pid, ident, stop, allow, folder}: the turns this companion runs now
@@ -184,6 +185,12 @@ def choice(item: dict) -> tuple:
     return (m if MODEL_ID.fullmatch(m) else ""), (e if e in EFFORTS else "")
 
 
+def account_of(item: dict) -> str:
+    """The extra Claude account a chat asked for ("" = the pc's own); accounts.env checks the name again."""
+    a = str(item.get("account") or "")
+    return a if item.get("agent") == "claude" and accounts.ID.fullmatch(a) else ""
+
+
 def approval_config(cid: str) -> str:
     """The --mcp-config file of a Claude turn: our permission prompt server (approval_mcp.py) for chat `cid`."""
     py = Path(sys.executable)
@@ -278,7 +285,7 @@ def parse(agent: str, line: str, st: dict) -> list:
             out.append(usage(tokens=tokens(e["usage"]), **({"ctx": st["ctx"]} if st.get("ctx") else {})))
         if t == "rate_limit_event":  # the account's usage as of this turn: the companion's limit chip and worker cap
             if got := workers.claude_rate(e, time.time()):
-                keep_usage("claude", got)
+                keep_usage("claude", got, st.get("account", ""))
         if t == "stream_event" and e.get("parent_tool_use_id"):  # a subagent's own words: its result says enough
             pass
         elif t == "stream_event":
@@ -691,9 +698,11 @@ def steer(cid: str, by: str, text: str) -> bool:
     return True
 
 
-def keep_usage(agent: str, got: list):
+def keep_usage(agent: str, got: list, account: str = ""):
     """A chat turn's own usage reading, for the companion (usage_live): newer than a worker's log or a stale status
-    line when the person works in web chats only."""
+    line when the person works in web chats only. An extra Claude account's goes to that account (accounts.py)."""
+    if account:
+        return accounts.keep_usage(account, got)
     try:
         (workers.DIR.parent / f"usage-{agent}-chat.json").write_text(json.dumps({"windows": got, "at": time.time()}), encoding="utf-8")
     except OSError:
@@ -1116,6 +1125,9 @@ class Live:
         env = {**os.environ, "KNOWLEDGE_CHAT": self.cid, "KNOWLEDGE_ASKS": str(workers.ASKS / f"{workers.safe(self.cid)}.txt")}
         if item.get("reader"):
             env["CLAUDE_CODE_SUBAGENT_MODEL"] = str(item["reader"])
+        if self.account:  # another Claude account: its own config folder, and its token when it has one, never the pc's
+            env.pop("CLAUDE_CODE_OAUTH_TOKEN", None)
+            env.update(accounts.env(self.account))
         if self.admin is False:  # admin is on here, not for this chat (a guest's): it may not raise its rights (Linux)
             cmd = admin_rights.no_raise(cmd)
         self.p = Hosted(LIVE_DIR / f"{self.cid}-{secrets.token_hex(4)}", cmd, self.folder, env if yolo else workers.git_safe_env(env),
@@ -1143,7 +1155,8 @@ class Live:
         self.post, self.log, self.yolo, self.pick = post, log, yolo, choice(item)
         self.admin = item.get("admin")  # None: admin is off on this pc; True/False: this chat may (not) have it (admin.py)
         self.asked = self.pick  # the chat's own choice ("" = default); pick may name the default (Codex)
-        self.st = {"session": item.get("session") or ""}
+        self.account = account_of(item)
+        self.st = {"session": item.get("session") or "", **({"account": self.account} if self.account else {})}
         self.lock, self.buf, self.flushed, self.last = threading.Lock(), [], time.time(), time.time()
         self.written = self.taken = 0  # messages written in, and echoed back as taken
         self.turn_open = self.busy = False  # the agent works on a turn; the server counts the chat running
@@ -1168,7 +1181,7 @@ class Live:
 
     def live_state(self) -> dict:
         """What was written to the agent, kept at every write."""
-        return {"chat": self.cid, "agent": self.agent, "folder": self.folder, "yolo": self.yolo, "admin": self.admin, "pick": list(self.pick),
+        return {"chat": self.cid, "agent": self.agent, "folder": self.folder, "yolo": self.yolo, "admin": self.admin, "pick": list(self.pick), "account": self.account,
                 "asked": list(self.asked), "session": self.st["session"], "allow": list(self.rec.get("allow", [])),
                 "in": in_size(self.p.d), "written": self.written, "turn_open": self.turn_open, "busy": self.busy,  # a send sets them
                 "slash": sorted(x for x in self.slash if x > self.taken)}
@@ -1188,7 +1201,8 @@ class Live:
     def adopt(cls, d: Path, s: dict, post, log):
         """The agent a companion before this one ran, read on from where that one saved."""
         self = cls.__new__(cls)
-        self.setup({"chat": s["chat"], "agent": s["agent"], "folder": s["folder"], "session": s["session"], "admin": s.get("admin")}, post, log, s["yolo"])
+        self.setup({"chat": s["chat"], "agent": s["agent"], "folder": s["folder"], "session": s["session"], "admin": s.get("admin"),
+                    "account": s.get("account", "")}, post, log, s["yolo"])
         self.pick, self.asked = tuple(s["pick"]), tuple(s["asked"])
         self.written, self.taken, self.turn_open, self.busy, self.subs = s["written"], s["taken"], s["turn_open"], s["busy"], set(s["subs"])
         self.bg, self.bg_out = dict(s.get("bg") or {}), dict(s.get("bg_out") or {})
@@ -2006,9 +2020,10 @@ def _start_live(item: dict, post, log, linked, yolo):
                 LIVE.pop(cid, None)
                 lv.close()
                 lv = None
-            if lv and lv.alive() and (lv.asked != choice(item) or lv.yolo != yolo(item["agent"]) or lv.admin != item.get("admin")) and not lv.busy and not lv.turn_open:
+            if lv and lv.alive() and (lv.asked != choice(item) or lv.yolo != yolo(item["agent"]) or lv.admin != item.get("admin")
+                                      or getattr(lv, "account", "") != account_of(item)) and not lv.busy and not lv.turn_open:
                 LIVE.pop(cid, None)
-                lv.close()  # another model, effort, YOLO or admin: the next process starts with it, the conversation resumes
+                lv.close()  # another model, effort, YOLO, admin or account: the next process starts with it, the conversation resumes
                 item = {**item, "session": lv.st["session"] or item.get("session", "")}
                 lv = None
             if not (lv and lv.alive()):
@@ -2032,6 +2047,9 @@ def _start_live(item: dict, post, log, linked, yolo):
 
 
 def self_test():
+    assert account_of({"agent": "claude", "account": "werk"}) == "werk", "a Claude chat runs under the account it picked"
+    assert account_of({"agent": "codex", "account": "werk"}) == "" and account_of({"agent": "claude", "account": "../x"}) == "", \
+        "only Claude has accounts, and only by a plain name"
     asks_tmp = tempfile.TemporaryDirectory()  # never the real companion's asks folder
     workers.ASKS = Path(asks_tmp.name)
     f = workers.remember_ask("c-x", "zet het in D:\\Games")

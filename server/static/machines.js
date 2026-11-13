@@ -484,6 +484,70 @@ function workersCell(m, a) {
   const running = (ag.workers || []).filter((w) => w.status === "running").length;
   return val(running ? `${running} running` : "none running", "muted");
 }
+// Claude accounts on one pc: the pc's own sign-in and each extra one (accounts.py), with sign-in, a long-lived token
+// and Remove. A chat picks one in its model chip; the sign-in itself never leaves the pc.
+function accountsCell(m) {
+  const ag = m.agents?.claude;
+  if (!ag) return null;
+  if (!ag.accounts) return val(steersAgent(m, "claude") ? "Update the plugin to add accounts" : "—", "muted");
+  const box = el("div", "mx-accounts"), steer = steersAgent(m, "claude");
+  for (const x of ag.accounts) {
+    const line = el("div", "mx-account"), who = x.email || (x.kind === "token" ? "long-lived token" : x.id ? "not signed in" : "unknown");
+    line.append(el("b", null, x.id || "own"), " ", val(who, x.email || x.kind === "token" ? "" : "mx-diff"));
+    if (x.plan) line.append(" ", val(x.plan, "muted"));
+    if (usageWindows(x).length) line.append(" ", val(usageText(x), "muted"));
+    if (x.error) line.append(el("p", "machine-error", x.error));
+    if (x.id && steer) {
+      const busy = pendingAction(m, "claude_login", (y) => y.account === x.id) || pendingAction(m, "claude_code", (y) => y.account === x.id);
+      if (x.login) {
+        const a = el("a", "btn small", "Open sign-in"); a.href = x.login; a.target = "_blank"; a.rel = "noopener noreferrer";
+        a.title = "Sign in with the account in a new tab; claude.com then shows a code to paste here";
+        line.append(" ", a, " ", machineButton("Paste code…", "The code the sign-in page showed", () => accountCode(m, x.id), busy));
+      } else line.append(" ", machineButton(x.kind ? "Sign in again" : "Sign in", `Sign ${x.id} in with the browser`, () => machineAction(m, "claude_login", { account: x.id }), busy));
+      line.append(" ", machineButton("Remove", `Sign ${x.id} out on ${m.label} and remove it`, () => confirm(`Remove the Claude account ${x.id} from ${m.label}? Chats that use it go back to the pc's own account.`) && machineAction(m, "claude_remove", { account: x.id }),
+        pendingAction(m, "claude_remove", (y) => y.account === x.id), "btn small quiet"));
+    }
+    box.append(line);
+  }
+  if (steer) box.append(machineButton("Add account…", "Another Claude account on this pc, for chats to pick", () => accountAdd(m), pendingAction(m, "claude_token")));
+  return box;
+}
+// A small form in a dialog (it is not redrawn with the list, so what is typed stays); done once closed or sent.
+function accountForm(title, intro, fields, go, send) {
+  let sent = false, done;
+  const closed = new Promise((r) => (done = r));
+  const d = el("dialog", "mx-dialog"), form = el("form", "mx-ask-form"), acts = el("div", "mx-pop-acts");
+  const ok = el("button", "btn primary", go), cancel = el("button", "btn quiet", "Cancel");
+  ok.type = "submit"; cancel.type = "button"; cancel.onclick = () => d.close(); acts.append(cancel, ok);
+  form.append(el("h3", null, title), ...intro.map((t) => (typeof t === "string" ? el("p", "muted", t) : t)));
+  for (const [label, input] of fields) { const l = el("label", null, label); l.append(input); form.append(l); }
+  form.append(acts);
+  form.onsubmit = (e) => { e.preventDefault(); sent = true; d.close(); Promise.resolve(send()).finally(done); };
+  d.append(form); d.onclose = () => { d.remove(); if (!sent) done(); };
+  document.body.append(d); d.showModal(); fields[0]?.[1].focus();
+  return closed;
+}
+function accountAdd(m) {
+  const name = el("input"), how = el("select"), token = el("input");
+  name.required = true; name.pattern = "[a-z0-9][a-z0-9\\-]{0,30}"; name.placeholder = "e.g. work"; name.title = "a-z, 0-9 and -";
+  how.append(new Option("Sign in with the browser", "login"), new Option("Paste a long-lived token (claude setup-token)", "token"));
+  token.type = "password"; token.autocomplete = "off"; token.placeholder = "sk-ant-oat01-…";
+  const tokenLine = el("p", "muted", "Run claude setup-token in a terminal on any pc and paste the token it prints. It holds for a year and goes only to this pc; the server does not keep it.");
+  const sync = () => { token.closest("label").hidden = tokenLine.hidden = how.value !== "token"; token.required = how.value === "token"; };
+  how.onchange = sync;
+  const shown = accountForm(`Add a Claude account on ${m.label}`, ["Chats on this pc can then run under it (the model chip). Settings, plugins and skills stay the pc's own.", tokenLine],
+    [["Name", name], ["How", how], ["Token", token]], "Add", () => (how.value === "token"
+      ? machineAction(m, "claude_token", { account: name.value, token: token.value })
+      : machineAction(m, "claude_login", { account: name.value })));
+  sync();
+  return shown;
+}
+function accountCode(m, account) {
+  const code = el("input");
+  code.required = true; code.autocomplete = "off"; code.placeholder = "the code from the sign-in page";
+  return accountForm(`Sign ${account} in on ${m.label}`, ["Paste the code claude.com showed after you signed in."], [["Code", code]], "Sign in",
+    () => machineAction(m, "claude_code", { account, code: code.value.trim() }));
+}
 // A limit: a switch (off: no limit, sent as 0) and, when on, a number from 1 up (how many is the owner's choice).
 function limitControl(most, busy, aria, send) {
   const box = el("span", "mx-limit"), num = el("input", "small");
@@ -565,6 +629,7 @@ function compareTable(pcs, here, mine) {
     grid.append(row("", "Hooks", pcs.map((m) => hooksCell(m, a))));
     grid.append(row("", "YOLO", pcs.map((m) => yoloCell(m, a))));
     grid.append(row("", "Workers", pcs.map((m) => workersCell(m, a))));
+    if (a === "claude" && mine) grid.append(row("", "Accounts", pcs.map((m) => accountsCell(m))));
   }
   const ids = [...new Set(pcs.flatMap((m) => Object.keys(m.companion?.tools || {})))].sort((x, y) => {
     const name = (id) => pcs.map((m) => m.companion?.tools?.[id]?.name).find(Boolean) || id;
