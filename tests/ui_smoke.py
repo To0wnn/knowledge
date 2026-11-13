@@ -722,6 +722,9 @@ async def cockpit_shell(browser, devices, secret: str) -> None:
         got = await pg.evaluate("""[[...document.querySelectorAll('#ck-canvas .ck-model .ck-mfam')].map(x => x.textContent),
           [...document.querySelectorAll('#ck-canvas .ck-mopt')].length, document.querySelectorAll('#ck-canvas .ck-mopt[aria-pressed=true]').length]""")
         check(len(got[0]) >= 1 and got[1] >= 1 and got[2] == 1, f"model chip: families, models, one picked {got}")
+        box = await pg.evaluate("""(() => { const r = document.querySelector('#ck-canvas .ck-model-list').getBoundingClientRect();
+          return [getComputedStyle(document.querySelector('#ck-canvas .ck-model-list')).position, r.left >= 0 && r.top >= 0 && r.right <= innerWidth && r.bottom <= innerHeight]; })()""")
+        check(box == ["fixed", True], f"model chip: the panel is fixed and inside the window, never clipped by a small grid card {box}")
         pick = pg.locator("#ck-canvas .ck-mopt:not([aria-pressed=true]):not(.ck-own)").first
         if await pick.count():
             await pick.click()

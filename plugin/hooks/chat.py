@@ -28,6 +28,7 @@ import textwrap
 import threading
 import types
 import time
+import urllib.request
 from pathlib import Path
 
 HOOKS = Path(__file__).resolve().parent
@@ -53,6 +54,7 @@ FLUSH = 0.7  # seconds: output is posted in batches at most this often
 EFFORTS = ("low", "medium", "high", "xhigh", "max", "ultra")  # every agent's levels together; each model lists its own
 MODEL_ID = re.compile(r"[A-Za-z0-9][\w.:/-]{0,79}", re.ASCII)  # a model name as the CLIs take it; nothing a .cmd shim would mangle
 CLAUDE_MODELS = ("fable", "opus", "sonnet", "haiku")  # Claude Code's aliases for the newest of each; it has no list command
+_CLAUDE_API: list = []  # the last list the Models API gave (kept when one ask fails, e.g. an expired login)
 MODELS_TTL = 6 * 3600
 _MODELS: dict = {}  # agent -> (at, [{id, name, efforts}])
 _AGY_ACP: list = []  # the models agy's ACP offered in a session here: once known, the list for agy
@@ -77,7 +79,7 @@ def _ask_models(agent: str):
     found = []
     try:
         if agent == "claude":
-            found = [{"id": m, "name": m.capitalize(), "efforts": list(EFFORTS[:5])} for m in CLAUDE_MODELS]
+            found = _claude_models()
         elif (exe := shutil.which(agent)) and agent == "codex":
             out = subprocess.run(workers.shim_line([exe, "debug", "models"]) if exe.lower().endswith((".cmd", ".bat")) else [exe, "debug", "models"],
                                  capture_output=True, text=True, encoding="utf-8", errors="replace", timeout=30).stdout  # UTF-8, never the ANSI code page
@@ -95,6 +97,50 @@ def _ask_models(agent: str):
         found = []
     # an empty answer (offline, a CLI error) is asked again in 10 minutes, not after hours
     _MODELS[agent] = (time.time() - (MODELS_TTL - 600 if not found else 0), found[:40])
+
+
+def _claude_token() -> str:
+    """Claude Code's own sign-in token on this pc (a file on Linux and Windows, the Keychain on macOS); "" when none."""
+    try:
+        if sys.platform == "darwin":
+            raw = subprocess.run(["security", "find-generic-password", "-s", "Claude Code-credentials", "-w"],
+                                 capture_output=True, text=True, timeout=10).stdout
+        else:
+            raw = (Path(os.environ.get("CLAUDE_CONFIG_DIR") or Path.home() / ".claude") / ".credentials.json").read_text(encoding="utf-8")
+        return str(json.loads(raw)["claudeAiOauth"]["accessToken"])
+    except (OSError, subprocess.SubprocessError, ValueError, KeyError, TypeError):
+        return ""
+
+
+def _claude_models(fetch=None) -> list:
+    """Claude Code's aliases (the newest of each line) plus every older model the account may use, from the Models API
+    with Claude Code's own sign-in, so new models appear and retired ones go by themselves. Without an answer: the
+    last list, else the aliases alone."""
+    global _CLAUDE_API
+    try:
+        if fetch is None:
+            tok = _claude_token()
+            req = urllib.request.Request("https://api.anthropic.com/v1/models?limit=100", headers={
+                "Authorization": f"Bearer {tok}", "anthropic-version": "2023-06-01", "anthropic-beta": "oauth-2025-04-20"})
+            fetch = lambda: json.load(urllib.request.urlopen(req, timeout=15)) if tok else {}
+        data = [m for m in fetch().get("data", []) if MODEL_ID.fullmatch(str(m.get("id", "")))]
+        if data:
+            _CLAUDE_API = data
+    except (OSError, ValueError, AttributeError):
+        pass
+    line = lambda m: m.get("line") or next((a for a in CLAUDE_MODELS if f"-{a}-" in m["id"]), "")
+    def efforts(m):
+        e = (m.get("capabilities") or {}).get("effort") or {}
+        return [x for x in EFFORTS[:5] if (e.get(x) or {}).get("supported")] if e.get("supported") else []
+    newest = {}
+    for m in sorted(_CLAUDE_API, key=lambda m: str(m.get("created_at", "")), reverse=True):
+        newest.setdefault(line(m), m)
+    out = [{"id": a, "name": f"{a.capitalize()}{f' {v}' if (v := (newest[a].get('display_name') or '').rpartition(' ')[2]) else ''}",
+            "efforts": efforts(newest[a])} if a in newest else {"id": a, "name": a.capitalize(), "efforts": list(EFFORTS[:5])}
+           for a in CLAUDE_MODELS]
+    out += [{"id": m["id"], "name": str(m.get("display_name") or m["id"]).removeprefix("Claude ")[:80], "efforts": efforts(m)}
+            for m in _CLAUDE_API if newest.get(line(m)) is not m or line(m) not in CLAUDE_MODELS]
+    return out
 
 
 def commands(agent: str) -> list:
@@ -2006,7 +2052,18 @@ def self_test():
         assert choice({"model": "opus", "effort": "max"}) == ("opus", "max")
         assert choice({"model": "a b", "effort": "huge"}) == ("", ""), "anything else falls back to the agent's default"
         assert choice({"model": "-rf", "effort": ""}) == ("", ""), "no model name that reads as a flag"
-        assert [m["id"] for m in models("claude", wait=True)] == list(CLAUDE_MODELS)
+        assert [m["id"] for m in models("claude", wait=True)][:4] == list(CLAUDE_MODELS)
+        eff = lambda *x: {"supported": True, **{e: {"supported": e in x} for e in EFFORTS[:5]}}
+        api = {"data": [{"id": "claude-opus-5-5", "display_name": "Claude Opus 5.5", "created_at": "2026-10", "line": "opus", "capabilities": {"effort": eff("low", "max")}},
+                        {"id": "claude-opus-4-6", "display_name": "Claude Opus 4.6", "created_at": "2026-02", "line": "opus", "capabilities": {"effort": eff("low", "high")}},
+                        {"id": "claude-haiku-4-5-20251001", "display_name": "Claude Haiku 4.5", "created_at": "2025-10", "capabilities": {"effort": {"supported": False}}},
+                        {"id": "bad id; rm", "display_name": "x"}]}
+        got = {m["id"]: m for m in _claude_models(lambda: api)}
+        assert list(got) == ["fable", "opus", "sonnet", "haiku", "claude-opus-4-6"], got  # Haiku 4.5 is the newest haiku here
+        assert got["opus"]["name"] == "Opus 5.5" and got["opus"]["efforts"] == ["low", "max"] and got["claude-opus-4-6"]["name"] == "Opus 4.6"
+        assert got["haiku"]["efforts"] == [] and got["fable"]["efforts"] == list(EFFORTS[:5])
+        def boom(): raise OSError("offline")
+        assert [m["id"] for m in _claude_models(boom)] == list(got)  # a failed ask keeps the last list
     workers.DIR = w
     assert json.loads(stdin_for("agy", 'a "b"\nc')) == {"event": "user", "message": {"role": "user", "content": 'a "b"\nc'}}
     w0 = workers.DIR  # a chat turn's rate_limit_event is kept for the companion's limit (usage-claude-chat.json)
