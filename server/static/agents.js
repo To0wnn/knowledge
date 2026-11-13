@@ -1287,7 +1287,7 @@ const levels = (m) => CK_EFFORTS.filter((e) => (m.efforts || []).includes(e));
 const ckModelOf = (card) => (card.catalog || []).find((x) => x.agent === card.pick?.agent && x.id === card.pick?.id);
 // Your own Claude or agy accounts on the chat's pc (Machines > Accounts; "" = its own sign-in first); a draft's pc
 // follows its folder.
-const ACC_AGENTS = ["claude", "agy"];
+const ACC_AGENTS = ["claude", "codex", "agy"];
 const ckAccPc = (card) => ckPc(card.meta.draft ? (card.where_ || "").split("\n")[0] : card.meta.machine);
 const ckAccAgent = (card) => card.pick?.agent || card.meta.agent;
 const ckAllAccounts = (card) => (ckAccPc(card)?.agents?.[ckAccAgent(card)]?.accounts || []).filter((a) => a.mine !== false);

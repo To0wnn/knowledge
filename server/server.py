@@ -6764,9 +6764,9 @@ def expire_secret_actions(now: float) -> int:
     return len(gone)
 
 
-ACCOUNT_AGENTS = ("claude", "agy")  # agents with more than one account per pc (accounts.py, agy_accounts.py)
+ACCOUNT_AGENTS = ("claude", "codex", "agy")  # agents with more than one account per pc (accounts.py, codex_accounts.py, agy_accounts.py)
 # the sign-in page of each agent's own OAuth: opened by the owner's browser
-ACCOUNT_LOGIN = {"claude": ("https://claude.com/", "https://claude.ai/"), "agy": ("https://accounts.google.com/",)}
+ACCOUNT_LOGIN = {"claude": ("https://claude.com/", "https://claude.ai/"), "codex": ("https://auth.openai.com/",), "agy": ("https://accounts.google.com/",)}
 
 
 def report_accounts(v, agent: str = "claude") -> list:
@@ -6783,6 +6783,8 @@ def report_accounts(v, agent: str = "claude") -> list:
                     "at": int(a["at"]) if isinstance(a.get("at"), (int, float)) and 0 < a["at"] < 2e10 else 0,
                     "expires": int(a["expires"]) if isinstance(a.get("expires"), (int, float)) and 0 < a["expires"] < 2e10 else 0,
                     **({"login": login} if login.startswith(ACCOUNT_LOGIN[agent]) and len(login) < 2000 else {}),
+                    # Codex's device sign-in: the one-time code the person enters on that page (it only links this pc's waiting codex)
+                    **({"usercode": a["usercode"]} if login and re.fullmatch(r"[A-Z0-9]{4}-[A-Z0-9]{4,6}", str(a.get("usercode") or "")) else {}),
                     "windows": report_windows(a.get("windows")), "by": str(a.get("by") or "")[:80], "main": a.get("main") is True,
                     "removing": a.get("removing") is True,
                     # an API key's money this month (Claude Code's total_cost_usd) and the budget its owner set
@@ -6791,7 +6793,7 @@ def report_accounts(v, agent: str = "claude") -> list:
 
 
 CLAUDE_MAIN_FILE = ADMIN_DIR / "claude_main.json"  # {machine: {person: account}}: the Claude account a person's chats there start on
-MAIN_FILES = {"claude": CLAUDE_MAIN_FILE, "agy": ADMIN_DIR / "agy_main.json"}  # the same per agent
+MAIN_FILES = {"claude": CLAUDE_MAIN_FILE, "codex": ADMIN_DIR / "codex_main.json", "agy": ADMIN_DIR / "agy_main.json"}  # the same per agent
 
 
 def claude_accounts_for(m: dict, user: str, own_pc: bool, agent: str = "claude") -> list:
@@ -6891,6 +6893,15 @@ def action_args(action: str, args: dict) -> dict:
         if action == "agy_key":  # a Gemini API key (AI Studio): billed per use, not the Google subscription
             if not re.fullmatch(r"AIza[\w-]{35}", str(args.get("key", "")).strip()):
                 raise ValueError("paste a Gemini API key from aistudio.google.com/apikey (AIza...)")
+            out["key"] = str(args["key"]).strip()
+        return out
+    if action in ("codex_login", "codex_cancel", "codex_key", "codex_remove"):  # extra Codex accounts (codex_accounts.py; the pc's own signs in in codex)
+        if not CLAUDE_ACCOUNT.fullmatch(str(args.get("account", ""))):
+            raise ValueError("account must be a name of a-z, 0-9 and -, at most 31 characters")
+        out = {"account": str(args["account"])}
+        if action == "codex_key":  # an OpenAI API key: billed per use, not the ChatGPT plan
+            if not re.fullmatch(r"sk-[\w-]{20,300}", str(args.get("key", "")).strip()):
+                raise ValueError("paste an OpenAI API key (sk-...)")
             out["key"] = str(args["key"]).strip()
         return out
     if action in ("install_tool", "remove_tool", "tool_auto"):  # an id only: the steps ship with the pc's own plugin (plugin/tools)
@@ -9772,9 +9783,9 @@ async def machine_report(request: Request):
     # (shortcut: an admins' own device shared by several admins takes the first of them by name; one admin per pc in practice)
     main = next((claude_main_of(dev["machine"], u, claude_accounts_for(m, u, True)) for u in sorted(read_json(CLAUDE_MAIN_FILE, {}).get(dev.get("machine", "")) or {})
                  if own_token(cfg, {"user": u, "admin": u in ADMINS}, steer=False)), "")
-    agy = next((claude_main_of(dev["machine"], u, claude_accounts_for(m, u, True, "agy"), "agy") for u in sorted(read_json(MAIN_FILES["agy"], {}).get(dev.get("machine", "")) or {})
-                if own_token(cfg, {"user": u, "admin": u in ADMINS}, steer=False)), "")
-    return JSONResponse({"ok": True, "closed_chats": closed, "newest": (await asyncio.to_thread(plugin_latest) or ("",))[0], "claude_main": main, "agy_main": agy,
+    extra = {f"{ag}_main": next((claude_main_of(dev["machine"], u, claude_accounts_for(m, u, True, ag), ag) for u in sorted(read_json(MAIN_FILES[ag], {}).get(dev.get("machine", "")) or {})
+                                 if own_token(cfg, {"user": u, "admin": u in ADMINS}, steer=False)), "") for ag in ("codex", "agy")}
+    return JSONResponse({"ok": True, "closed_chats": closed, "newest": (await asyncio.to_thread(plugin_latest) or ("",))[0], "claude_main": main, **extra,
                          **({"github_token": gh} if gh else {}), **({"aliases": aliases} if aliases else {})})
 
 

@@ -37,6 +37,7 @@ sys.path.insert(0, str(HOOKS))
 import workers  # noqa: E402
 import accounts  # noqa: E402
 import agy_accounts  # noqa: E402
+import codex_accounts  # noqa: E402
 import admin as admin_rights  # noqa: E402
 
 RUNNING: dict = {}  # chat id -> {pid, ident, stop, allow, folder}: the turns this companion runs now
@@ -196,7 +197,7 @@ def account_of(item: dict) -> str:
     """The extra Claude or agy account a chat asked for ("" = the pc's own); accounts.env / agy_accounts.env check
     the name again."""
     a = str(item.get("account") or "")
-    return a if item.get("agent") in ("claude", "agy") and accounts.ID.fullmatch(a) else ""
+    return a if item.get("agent") in ("claude", "codex", "agy") and accounts.ID.fullmatch(a) else ""
 
 
 def approval_config(cid: str) -> str:
@@ -1220,6 +1221,8 @@ class Live:
             env = {**{k: v for k, v in env.items() if k not in accounts.AUTH_ENV}, **extra}
         if self.agent == "agy" and self.account:  # its own folder (agy acp --gemini-dir), never the pc's keyring
             env = {**env, **agy_accounts.env(self.account)}
+        if self.agent == "codex" and self.account:  # its own CODEX_HOME, never the pc's own key
+            env = {**{k: v for k, v in env.items() if k not in codex_accounts.AUTH_ENV}, **codex_accounts.env(self.account)}
         if self.admin is False:  # admin is on here, not for this chat (a guest's): it may not raise its rights (Linux)
             cmd = admin_rights.no_raise(cmd)
         self.p = Hosted(LIVE_DIR / f"{self.cid}-{secrets.token_hex(4)}", cmd, self.folder, env if yolo else workers.git_safe_env(env),
@@ -1560,6 +1563,7 @@ class CodexLive(Live):
                                         else {"approvalPolicy": "on-request", "sandbox": "workspace-write", **codex_worktree_config(self.folder)})}
         r = self.call("thread/resume", {"threadId": self.st["session"], **perms}) if self.st["session"] else self.call("thread/start", perms)
         self.st["session"] = (r.get("thread") or {}).get("id") or self.st["session"]
+        codex_accounts.keep_thread(self.st["session"], self.account)  # its rollout is not the pc's own usage
         self.pick = codex_default(self.call, self.folder, *self.pick)
 
     def list_commands(self):  # its skills (sent as a skill input) and /compact (thread/compact/start)
@@ -2274,8 +2278,8 @@ def self_test():
     accounts.add_spend = real_add
     assert spent == [("werk", 0.25), ("werk", 0.5), ("werk", 0.1)], spent
     assert account_of({"agent": "claude", "account": "werk"}) == "werk", "a Claude chat runs under the account it picked"
-    assert account_of({"agent": "codex", "account": "werk"}) == "" and account_of({"agent": "claude", "account": "../x"}) == "", \
-        "only Claude and agy have accounts, and only by a plain name"
+    assert account_of({"agent": "codex", "account": "werk"}) == "werk" and account_of({"agent": "claude", "account": "../x"}) == "" \
+        and account_of({"agent": "other", "account": "werk"}) == "", "Claude, Codex and agy have accounts, only by a plain name"
     assert account_of({"agent": "agy", "account": "werk"}) == "werk"
     lv = AgyLive.__new__(AgyLive)
     lv.yolo, lv.account, lv.st, lv.cid, lv.pick = True, "werk", {"session": ""}, "c", ("", "")

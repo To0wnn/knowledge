@@ -21,7 +21,7 @@ logs=$(mktemp -d); trap 'rm -rf "$logs"' EXIT
 # A background job of sh ignores Ctrl-C: on INT or TERM stop the whole group (the steps and the servers they started).
 trap 'trap - INT TERM; kill -TERM 0' INT TERM
 step() { name=$1; shift; : >"$logs/$name.rc"; ( "$@" >"$logs/$name" 2>&1 && echo 0 >"$logs/$name.rc" ) & }  # no 0 in .rc = failed
-hooks() { for h in limits secret-guard self_update accounts agy_accounts companion model_settings workers chat watch tools sysstats awake admin; do
+hooks() { for h in limits secret-guard self_update accounts agy_accounts codex_accounts companion model_settings workers chat watch tools sysstats awake admin; do
   python3 "../plugin/hooks/$h.py" --self-test || return 1; done; python3 ../plugin/hooks/docs-sync.py --selftest; }
 step hooks hooks
 # client code also runs on macOS's /usr/bin/python3 (3.9): an f-string with a backslash in {} once broke the setup there,

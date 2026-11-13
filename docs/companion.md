@@ -300,7 +300,29 @@ fixed remote actions and relays chats. Installing it is part of the client setup
   handed to the pc once and then replaced by "(hidden)" in the queue; one the pc did not fetch within 10 minutes
   (`SECRET_WAIT`) is hidden and failed by the server's background check. It never shows on the page, in the audit log or
   in the companion's activity.
-- **Not (yet):** Codex accounts are not covered; agy's are below.
+- **Codex and agy:** their accounts are below.
+
+## Codex accounts per pc
+
+- **More than one Codex account on a pc** (`plugin/hooks/codex_accounts.py`, Linux, macOS and Windows): Machines >
+  Codex > Accounts lists the pc's own sign-in (its email and plan, read from the id token in `auth.json`) and each
+  extra account. Add account… takes a name and one of two ways in:
+  - **ChatGPT:** the companion runs `codex login --device-auth` in the account's folder; its row shows Open sign-in
+    and the one-time code to enter on that page. Nothing goes back to the pc: codex ends by itself once signed in
+    (the code holds 15 minutes), and the next report shows the account signed in, or codex's own reason it failed.
+    ✕ stops a waiting sign-in.
+  - **OpenAI API key:** `sk-…`, given to `codex login --with-api-key` on its stdin, saved by codex in that folder.
+- **How a chat or worker uses it:** the model chip of a Codex chat gets the Account row; the turn (and a worker under
+  the pc owner's main account) runs with `CODEX_HOME=~/.knowledge/codex-accounts/<name>`, without the pc's own
+  `OPENAI_API_KEY` / `CODEX_API_KEY`. That folder links everything of `~/.codex` (`config.toml`, plugins, skills,
+  `AGENTS.md`, `sessions` with the rollouts), so a thread resumes after a switch (tested on codex 0.169:
+  `thread/resume` from such a home); its sign-in (`auth.json`), databases (`*.sqlite`: a linked one would get a second
+  `-wal` beside the link), logs and app-server daemon are its own. On Windows folders are junctions and files copies.
+- **Usage:** an extra ChatGPT account's 5-hour and weekly windows come from `account/rateLimits/read` of a
+  `codex app-server` under its own `CODEX_HOME`, every 15 minutes; the pc's own from its newest rollout as before,
+  skipping the rollouts of chats on an extra account (their threads are kept in `codex-accounts/.threads.json`), as
+  they share the sessions folder. An API key has no windows. The worker cap and limit chip follow the main account.
+- **Owners, guests, Make main and Remove** follow the Claude rules above (`codex_main.json` on the server).
 
 ## agy accounts per pc (Linux)
 

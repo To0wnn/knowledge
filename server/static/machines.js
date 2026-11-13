@@ -574,7 +574,7 @@ async function accountMain(m, account, agent = "claude") {
   await loadMachines();
 }
 function accountsCell(m, agent = "claude") {
-  if (agent === "agy") return agyAccountsCell(m);
+  if (EXTRA_ACCOUNTS[agent]) return extraAccountsCell(m, agent);
   const ag = m.agents?.claude;
   if (!ag) return null;
   if (!ag.accounts) return val(steersAgent(m, "claude") ? "Update the plugin to add accounts" : "—", "muted");
@@ -679,75 +679,90 @@ function accountsCell(m, agent = "claude") {
   }
   return box;
 }
-// agy accounts on a Linux pc (agy_accounts.py): extra Google accounts for chats, signed in on Google's page whose code
-// comes back here, or a Gemini API key. The pc's own sign-in stays agy's own; workers run under the pc owner's main one.
-function agyAccountsCell(m) {
-  const ag = m.agents?.agy;
+// agy (Linux) and Codex accounts on one pc (agy_accounts.py, codex_accounts.py): extra accounts for chats, a main one
+// per person (its workers run under the pc owner's), signed in on the provider's page or by an API key. agy's page
+// shows a code to paste back here; Codex's device sign-in shows a code here to enter on its page, and ends by itself.
+// [value, button, what it is, what to paste (none: the provider's page), its form]
+const EXTRA_ACCOUNTS = {
+  agy: { missing: "Linux only, with an updated plugin", key: "Gemini API key", paste: true, ways: [
+    ["login", "Google", "Sign in with the Google account in your browser; its page then shows a code to paste on the account's row. Uses that account's own quota.", "", ""],
+    ["apikey", "Gemini API key", "A key from Google AI Studio (aistudio.google.com/apikey). Billed per use (or the free tier), not a subscription.", "AIza…", "AIza[\\w\\-]{35}"]] },
+  codex: { missing: "Update the plugin to add accounts", key: "OpenAI API key", paste: false, ways: [
+    ["login", "ChatGPT", "Its row then shows a link and a one-time code: open the link, sign in with the ChatGPT account and enter the code. Uses that account's plan.", "", ""],
+    ["apikey", "OpenAI API key", "A key from platform.openai.com/api-keys. Billed per use, not a ChatGPT plan.", "sk-…", "sk-[\\w\\-]{20,300}"]] },
+};
+function extraAccountsCell(m, agent) {
+  const ag = m.agents?.[agent], cfg = EXTRA_ACCOUNTS[agent], name = AGENT_NAME[agent] || agent;
   if (!ag) return null;
-  if (!ag.accounts) return val(steersAgent(m, "agy") ? "Linux only, with an updated plugin" : "—", "muted");
-  const box = el("div", "mx-accounts"), steer = !!m.online && !!m.companion && !m.old && (steersAgent(m, "agy") || !m.own && usesPc(m)), main = m.agyMain || "";
+  if (!ag.accounts) return val(steersAgent(m, agent) ? cfg.missing : "—", "muted");
+  const box = el("div", "mx-accounts"), steer = !!m.online && !!m.companion && !m.old && (steersAgent(m, agent) || !m.own && usesPc(m)), main = m[`${agent}Main`] || "";
   for (const x of accountOrder(ag.accounts, main)) {
     const line = el("div", "mx-account"), mine = x.mine !== false;
-    const who = !x.id ? "this pc's own sign-in" : x.kind === "apikey" ? `Gemini API key${x.preview ? ` (${x.preview})` : ""}` : x.email || (x.kind ? "signed in" : "not signed in");
+    const who = !x.id ? `this pc's own sign-in${x.email ? ` (${x.email})` : ""}` : x.kind === "apikey" ? `${cfg.key}${x.preview ? ` (${x.preview})` : ""}` : x.email || (x.kind ? "signed in" : "not signed in");
     line.append(el("b", null, x.id || "own"), " ", val(who, !x.id || x.kind ? "" : "mx-diff"));
-    if (mine && x.id === main) { const p = el("span", "pill", "main"); p.title = "Default account for workers and your new agy chats on this pc"; line.append(p); }
+    if (x.plan) line.append(" ", val(x.plan, "muted"));
+    if (mine && x.id === main) { const p = el("span", "pill", "main"); p.title = `Default account for workers and your new ${name} chats on this pc`; line.append(p); }
     if (!mine) line.append(" ", val(`added by ${x.by || "?"}`, "muted"));
     if (mine && x.id !== main && accountSignedIn(x) && usageWindows(x).length) line.append(accountBars(x)); // the head shows the main one's
     if (x.error) line.append(el("p", "machine-error", x.error));
-    const acts = [], busy = ["agy_login", "agy_code", "agy_key"].some((k) => pendingAction(m, k, (y) => y.account === x.id));
+    const acts = [], busy = ["login", "code", "key"].some((k) => pendingAction(m, `${agent}_${k}`, (y) => y.account === x.id));
     if (steer && mine && x.id !== main) {
-      const b = actionButton("Make main", () => accountMain(m, x.id, "agy"), "btn small quiet");
-      b.title = "Make default account for workers and your new agy chats on this pc"; acts.push(b);
+      const b = actionButton("Make main", () => accountMain(m, x.id, agent), "btn small quiet");
+      b.title = `Make default account for workers and your new ${name} chats on this pc`; acts.push(b);
     }
     if (steer && mine && x.id && x.login) {
       const a = el("a", "btn small primary", "Open sign-in"); a.href = x.login; a.target = "_blank"; a.rel = "noopener noreferrer";
-      a.title = "Sign in with the Google account in a new tab, then paste the code it shows (or the address of the page you land on) here";
-      const inp = el("input"); inp.className = "input small"; inp.placeholder = "code or address"; inp.autocomplete = "off";
-      inp.setAttribute("aria-label", "Code from the Google sign-in");
-      const ok = machineButton("Confirm", "Finish the sign-in with this code", () => inp.value.trim() ? machineAction(m, "agy_code", { account: x.id, code: inp.value.trim() }) : null, busy);
-      inp.onkeydown = (e) => { if (e.key === "Enter") { e.preventDefault(); ok.click(); } };
-      const stop = machineButton("✕", "Cancel this sign-in", () => machineAction(m, "agy_cancel", { account: x.id }),
-        busy || pendingAction(m, "agy_cancel", (y) => y.account === x.id), "btn small quiet");
+      acts.push(a);
+      if (cfg.paste) {
+        a.title = "Sign in in a new tab, then paste the code it shows (or the address of the page you land on) here";
+        const inp = el("input"); inp.className = "input small"; inp.placeholder = "code or address"; inp.autocomplete = "off";
+        inp.setAttribute("aria-label", "Code from the sign-in page");
+        const ok = machineButton("Confirm", "Finish the sign-in with this code", () => inp.value.trim() ? machineAction(m, `${agent}_code`, { account: x.id, code: inp.value.trim() }) : null, busy);
+        inp.onkeydown = (e) => { if (e.key === "Enter") { e.preventDefault(); ok.click(); } };
+        acts.push(inp, ok);
+      } else if (x.usercode) {
+        a.title = "Sign in in a new tab and enter this code there; this row updates once it is done";
+        const code = el("code", "mx-usercode", x.usercode); code.title = "The one-time code to enter on the sign-in page (15 minutes)";
+        acts.push(val("then enter", "muted"), code);
+      }
+      const stop = machineButton("✕", "Cancel this sign-in", () => machineAction(m, `${agent}_cancel`, { account: x.id }),
+        busy || pendingAction(m, `${agent}_cancel`, (y) => y.account === x.id), "btn small quiet");
       stop.setAttribute("aria-label", "Cancel sign-in");
-      acts.push(a, inp, ok, stop);
+      acts.push(stop);
     } else if (steer && mine && x.id) {
-      acts.push(machineButton(x.kind ? "Change sign-in…" : "Sign in…", `Sign ${x.id} in with Google or a Gemini API key`, () => agyAccountAdd(m, x.id), busy, x.kind ? "btn small quiet" : "btn small"));
+      acts.push(machineButton(x.kind ? "Change sign-in…" : "Sign in…", `Sign ${x.id} in with ${cfg.ways[0][1]} or an API key`, () => extraAccountAdd(m, agent, x.id), busy, x.kind ? "btn small quiet" : "btn small"));
     }
-    if (x.removing) acts.push(el("span", "muted", "Removed once its chats end"));
-    else if (steer && x.id && (mine || m.own)) acts.push(machineButton("Remove", `Remove ${x.id} from ${m.label}`, () => confirm(`Remove the agy account ${x.id} from ${m.label}? A chat running on it finishes first; after that, chats that use it go back to the pc's own sign-in.`) ? machineAction(m, "agy_remove", { account: x.id }) : null,
-      pendingAction(m, "agy_remove", (y) => y.account === x.id), "btn small quiet"));
+    if (x.removing) acts.push(el("span", "muted", "Removed once its chats and workers end"));
+    else if (steer && x.id && (mine || m.own)) acts.push(machineButton("Remove", `Remove ${x.id} from ${m.label}`, () => confirm(`Remove the ${name} account ${x.id} from ${m.label}? A chat or worker running on it finishes first; after that, chats that use it go back to the pc's own sign-in.`) ? machineAction(m, `${agent}_remove`, { account: x.id }) : null,
+      pendingAction(m, `${agent}_remove`, (y) => y.account === x.id), "btn small quiet"));
     if (acts.length) { const row = el("div", "mx-pop-acts"); row.append(...acts); line.append(row); }
     box.append(line);
   }
   if (steer) {
     const addRow = el("div", "mx-accounts-add");
-    addRow.append(machineButton("+ Add account…", "Another Google account or Gemini API key for agy on this pc, for your chats to pick", () => agyAccountAdd(m), false, "btn small quiet"));
+    addRow.append(machineButton("+ Add account…", `Another ${cfg.ways[0][1]} account or ${cfg.key} for ${name} on this pc, for your chats to pick`, () => extraAccountAdd(m, agent), false, "btn small quiet"));
     box.append(addRow);
   }
   return box;
 }
-// [value, button, what it is, what to paste (none: Google's page), its form]
-const AGY_WAYS = [
-  ["login", "Google", "Sign in with the Google account in your browser; its page then shows a code to paste on the account's row. Uses that account's own quota.", "", ""],
-  ["apikey", "Gemini API key", "A key from Google AI Studio (aistudio.google.com/apikey). Billed per use (or the free tier), not a subscription.", "AIza…", "AIza[\\w\\-]{35}"]];
-function agyAccountAdd(m, account = null) { // null: a new account; a name: sign that one in another way
-  const name = el("input"), secret = el("input"), ways = el("div", "seg"), about = el("p", "muted");
+function extraAccountAdd(m, agent, account = null) { // null: a new account; a name: sign that one in another way
+  const cfg = EXTRA_ACCOUNTS[agent], name = el("input"), secret = el("input"), ways = el("div", "seg"), about = el("p", "muted");
   name.required = true; name.pattern = "[a-z0-9][a-z0-9\\-]{0,30}"; name.placeholder = "e.g. work"; name.title = "a-z, 0-9 and -";
   if (account !== null) { name.value = account; name.readOnly = true; }
   secret.type = "password"; secret.autocomplete = "off";
   ways.setAttribute("role", "group"); ways.setAttribute("aria-label", "How it signs in");
-  let way = AGY_WAYS[0];
+  let way = cfg.ways[0];
   const pick = (w) => {
     way = w; about.textContent = `${w[2]} A key goes only to this pc; the server does not keep it.`;
     for (const b of ways.children) b.setAttribute("aria-pressed", String(b.dataset.way === w[0]));
     const lab = secret.closest("label"); if (lab) lab.hidden = !w[3];
     secret.required = !!w[3]; secret.placeholder = w[3]; secret.pattern = w[4] || ".*"; secret.value = "";
   };
-  for (const w of AGY_WAYS) { const b = el("button", null, w[1]); b.type = "button"; b.dataset.way = w[0]; b.onclick = () => pick(w); ways.append(b); }
-  const shown = accountForm(account ? `Sign ${account} in on ${m.label}` : `Add an agy account on ${m.label}`,
+  for (const w of cfg.ways) { const b = el("button", null, w[1]); b.type = "button"; b.dataset.way = w[0]; b.onclick = () => pick(w); ways.append(b); }
+  const shown = accountForm(account ? `Sign ${account} in on ${m.label}` : `Add a${agent === "agy" ? "n agy" : ` ${AGENT_NAME[agent]}`} account on ${m.label}`,
     [...(account === null ? ["Chats on this pc can then run under it (the model chip). Settings, plugins and skills stay the pc's own; workers run under your main account."] : []), ways, about],
     [...(account === null ? [["Name", name]] : []), ["Key", secret]], account === null ? "Add" : "Sign in",
-    () => (way[0] === "login" ? machineAction(m, "agy_login", { account: name.value }) : machineAction(m, "agy_key", { account: name.value, key: secret.value.trim() })));
+    () => (way[0] === "login" ? machineAction(m, `${agent}_login`, { account: name.value }) : machineAction(m, `${agent}_key`, { account: name.value, key: secret.value.trim() })));
   pick(way);
   return shown;
 }
@@ -882,14 +897,14 @@ function compareTable(pcs, here, mine) {
     const head = mxRow("mx-agent", name, []);
     if (!guest) head.insertBefore(meters(pcs, a), head.lastChild);
     grid.append(head);
-    if (guest) { if (a === "claude" || a === "agy") grid.append(row("", "Accounts", pcs.map((m) => accountsCell(m, a)))); continue; }
+    if (guest) { if (a === "claude" || EXTRA_ACCOUNTS[a]) grid.append(row("", "Accounts", pcs.map((m) => accountsCell(m, a)))); continue; }
     grid.append(row("", "Version", pcs.map((m) => versionCell(m, a))));
     // rows that would only repeat what the pc's head says ("Knowledge 0.43.x") or say all is well show once there is news
     if (pcs.some((m) => m.agents?.[a] && m.agents[a].plugin !== m.companion?.version)) grid.append(row("", "Plugin", pcs.map((m) => pluginCell(m, a))));
     if (pcs.some((m) => m.agents?.[a] && (m.agents[a].trusted !== true || recentError(m.agents[a])))) grid.append(row("", "Hooks", pcs.map((m) => hooksCell(m, a))));
     grid.append(row("", "YOLO", pcs.map((m) => yoloCell(m, a))));
     if (pcs.some((m) => (m.agents?.[a]?.workers || []).some((w) => w.status === "running"))) grid.append(row("", "Workers", pcs.map((m) => workersCell(m, a))));
-    if (a === "claude" || a === "agy") grid.append(row("", "Accounts", pcs.map((m) => accountsCell(m, a))));
+    if (a === "claude" || EXTRA_ACCOUNTS[a]) grid.append(row("", "Accounts", pcs.map((m) => accountsCell(m, a))));
   }
   const ids = [...new Set(pcs.flatMap((m) => Object.keys(m.companion?.tools || {})))].sort((x, y) => {
     const name = (id) => pcs.map((m) => m.companion?.tools?.[id]?.name).find(Boolean) || id;

@@ -869,8 +869,11 @@ async def shell(browser, devices, secret: str) -> None:
         check(acc[0][0].startswith("own") and any("long-lived token" in a for a in acc[0]) and acc[1][0] == "https://claude.com/cai/oauth/authorize?code=true",
               f"Machines: Claude accounts with the sign-in link of the one that waits {acc}")
         gmail = next((a for a in acc[0] if a.startswith("gmail")), "")
-        check(acc[1][1:] == ["https://accounts.google.com/o/oauth2/auth?client_id=x"] and "Confirm" in gmail and "Remove" in gmail,
+        check("https://accounts.google.com/o/oauth2/auth?client_id=x" in acc[1] and "Confirm" in gmail and "Remove" in gmail,
               f"Machines: agy accounts with Google's sign-in link and a code to paste {gmail} {acc[1]}")
+        cg, ok_ = (next((a for a in acc[0] if a.startswith(n)), "") for n in ("chatgpt", "openai"))
+        check("https://auth.openai.com/codex/device" in acc[1] and "ABCD-EFGH2" in cg and "Confirm" not in cg and "OpenAI API key (sk-proj-…kkkk)" in ok_,
+              f"Machines: a Codex device sign-in shows its link and one-time code (nothing to paste); an OpenAI key its preview {cg} {ok_}")
         aikey, gwork = (next((a for a in acc[0] if a.startswith(n)), "") for n in ("aikey", "gwork"))
         check("Gemini API key (AIzaSyAB…kkkk)" in aikey and "Change sign-in" in aikey and "g@example.org" in gwork and "30%" in gwork,
               f"Machines: an agy API key account, and a Google one with its usage {aikey} {gwork}")

@@ -397,6 +397,9 @@ def start(agent: str, task: dict, machine: str, where: dict, yolo: bool, nonce: 
     if agent == "agy" and account:  # an extra agy account: its own folder through a home of links, never the keyring
         import agy_accounts
         env = {**env, **agy_accounts.worker_env(account)}
+    if agent == "codex" and account:  # an extra Codex account: its own CODEX_HOME, never the pc's own key
+        import codex_accounts
+        env = {**{k: v for k, v in env.items() if k not in codex_accounts.AUTH_ENV}, **codex_accounts.env(account)}
     env = env if yolo else git_safe_env(env)
     ckpt = checkpoint(where["cwd"], task["id"]) if yolo and where.get("branch") else ""
     cmd, note = argv(agent, exe, prompt(task, agent, machine, where, yolo), yolo, where), ""

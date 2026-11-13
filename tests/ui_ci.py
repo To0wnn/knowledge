@@ -87,7 +87,9 @@ def seed() -> None:
     assert '"isError":false' in body, body  # an edit of a homelab memo: Changes shows its lines added/removed
     pc = {**bearer, "X-Knowledge-Machine": MID, "X-Knowledge-Machine-Label": "smoke-pc"}
     ok_agent = {"plugin": "0.21.1", "trusted": True}  # as a healthy pc reports: no Plugin or Hooks row repeats it
-    report = {"version": "0.21.1", "maxAgents": 4, "agents": {"codex": {**ok_agent}, "claude": {**ok_agent, "models": [
+    report = {"version": "0.21.1", "maxAgents": 4, "agents": {"codex": {**ok_agent, "accounts": [{"id": "", "kind": "login", "email": "me@example.org", "plan": "plus"},
+        {"id": "chatgpt", "login": "https://auth.openai.com/codex/device", "usercode": "ABCD-EFGH2"}, {"id": "openai", "kind": "apikey", "preview": "sk-proj-…kkkk"}]},
+        "claude": {**ok_agent, "models": [
         {"id": "opus", "name": "Opus", "efforts": ["low", "high"], "default": "high"}, {"id": "sonnet", "name": "Sonnet", "efforts": ["low"]}],
         "commands": [{"name": "compact", "description": "Clear history, keep a summary", "hint": ""}, {"name": "verify-done", "description": "Prove a task is done", "hint": ""}],
         "accounts": [{"id": "", "email": "me@example.org", "plan": "max_5x"}, {"id": "work", "kind": "token", "windows": [[40, "5h", time.time() + 3600]]},

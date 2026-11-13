@@ -586,6 +586,7 @@ body.admin-page { display: block; overflow-y: auto; }
   overflow-wrap: anywhere;
 }
 .mx-account .pill { margin-left: 4px; }
+.mx-usercode { font: 600 15px/1 var(--mono, ui-monospace, monospace); letter-spacing: 1px; padding: 4px 8px; border-radius: 6px; background: var(--hover); user-select: all; }
 .mx-account .mx-pop-acts { margin-top: 8px; padding-top: 6px; border-top: 1px solid var(--line); flex-wrap: wrap; }
 .mx-account .mx-pop-acts input {
   height: 26px;

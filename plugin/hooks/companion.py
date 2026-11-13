@@ -49,6 +49,7 @@ sys.path.insert(0, str(HOOKS))
 import model_settings  # noqa: E402  (next to this file)
 import accounts  # noqa: E402  (extra Claude accounts, signed in from the web UI)
 import agy_accounts  # noqa: E402  (extra agy accounts, Linux)
+import codex_accounts  # noqa: E402  (extra Codex accounts)
 import admin as admin_rights  # noqa: E402  (admin rights for chats, switched on once per pc)
 import agent_hooks  # noqa: E402  (the wake code and the session registry)
 import awake  # noqa: E402  (no idle sleep while an agent works)
@@ -1036,6 +1037,8 @@ def save_settings(change: dict):
             s["claudeMain"] = str(change["claudeMain"] or "")
         if "agyMain" in change:
             s["agyMain"] = str(change["agyMain"] or "")
+        if "codexMain" in change:
+            s["codexMain"] = str(change["codexMain"] or "")
         save("settings.json", s)
 
 
@@ -1044,6 +1047,34 @@ def claude_main() -> str:
     follows it; "" = the pc's own sign-in, also when that account is gone."""
     name = str(load("settings.json", {}).get("claudeMain") or "")
     return name if name in accounts.names() else ""
+
+
+def codex_main() -> str:
+    """The Codex account this pc's owner made main: workers run under it and the usage limit follows it; "" = the pc's
+    own sign-in, also when that account is gone."""
+    name = str(load("settings.json", {}).get("codexMain") or "")
+    return name if name in codex_accounts.names() else ""
+
+
+def codex_windows(name: str, now: float) -> list:
+    """One Codex account's usage windows: an extra one's asked under its own CODEX_HOME (an API key has none), the pc's
+    own from its newest rollout of the last 15 min that is no extra account's chat, else asked the same way."""
+    if name:
+        return codex_rate_read(now, name) if codex_accounts.status(codex_accounts.folder(name))["kind"] == "login" else []
+    days, theirs = [time.localtime(now - d * 86400) for d in (0, 1)], codex_accounts.threads()
+    files = [f for d in days for f in CODEX.glob(f"sessions/{d.tm_year:04d}/{d.tm_mon:02d}/{d.tm_mday:02d}/rollout-*.jsonl")
+             if now - f.stat().st_mtime < 900 and not any(t in f.name for t in theirs)]
+    return (agent_hooks.limits.codex_used(str(max(files, key=lambda f: f.stat().st_mtime)), now) if files else []) or codex_rate_read(now)
+
+
+def codex_listing(now: float) -> list:
+    """The Codex accounts on this pc for the Machines list (codex_accounts.py); [] when they cannot be read now."""
+    try:
+        main = codex_main()
+        return [{**a, **({"main": True} if a["id"] == main else {})} for a in codex_accounts.listing(now, lambda n: codex_windows(n, now))]
+    except Exception as e:  # the report goes on without them
+        log("error", "Could not read the Codex accounts", f"{type(e).__name__}: {e}"[:300])
+        return []
 
 
 def agy_main() -> str:
@@ -1127,7 +1158,7 @@ def usage_info(agent: str, ws: dict, now: float) -> list:
     tell it while a session runs, so the last reading is kept until its window resets: usage does not go down before
     that."""
     f = STATE / f"usage-{agent}.json"
-    acct = claude_main() if agent == "claude" else agy_main() if agent == "agy" else ""  # a reading belongs to the main account it was taken under
+    acct = {"claude": claude_main, "codex": codex_main, "agy": agy_main}[agent]()  # a reading belongs to the main account it was taken under
     got = usage_live(agent, ws, now)
     if got:
         try:
@@ -1146,21 +1177,22 @@ def usage_info(agent: str, ws: dict, now: float) -> list:
 CODEX_READ_EVERY = 900  # seconds between asking Codex for its limits without a session
 
 
-def codex_rate_read(now: float):
+def codex_rate_read(now: float, account: str = ""):
     """Codex's limits when no session ran lately: `codex app-server`, then account/rateLimits/read (no prompt, no
-    tokens), in the background at most every CODEX_READ_EVERY; the last answer until then, None when unknown."""
-    f = STATE / "codex-rate.json"
+    tokens), in the background at most every CODEX_READ_EVERY; the last answer until then, None when unknown. An extra
+    account's is asked under its own CODEX_HOME and kept in a file of its own."""
+    f = STATE / (f"codex-rate-{account}.json" if account else "codex-rate.json")
     try:
         old = json.loads(f.read_text(encoding="utf-8"))
     except (OSError, ValueError):
         old = {}
     if now - old.get("at", 0) >= CODEX_READ_EVERY:
         write_json(f, {**old, "at": now})  # one read at a time
-        threading.Thread(target=_codex_rate_ask, args=(f,), daemon=True).start()
+        threading.Thread(target=_codex_rate_ask, args=(f, account), daemon=True).start()
     return kept_windows(f, now)
 
 
-def _codex_rate_ask(f):
+def _codex_rate_ask(f, account: str = ""):
     exe, got = shutil.which("codex"), None
     if exe:
         cmd = [exe, "app-server"]
@@ -1168,6 +1200,7 @@ def _codex_rate_ask(f):
             cmd = workers.shim_line(cmd)
         try:
             p = subprocess.Popen(cmd, stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL, text=True, encoding="utf-8",
+                                 env=codex_accounts.run_env(account),
                                  **({"creationflags": workers.WIN_FLAGS} if os.name == "nt" else {"start_new_session": True}))
             lines = []
             reader = threading.Thread(target=lambda: lines.extend(iter(p.stdout.readline, "")), daemon=True)
@@ -1344,11 +1377,8 @@ def usage_live(agent: str, ws: dict, now: float):
         if agent == "claude":  # the account workers run under: the worker cap and the limit chip follow it
             # a reading stays true until its window resets, however old; per window the fullest reading is the true one
             return claude_windows(claude_main(), ws, now)
-        if agent == "codex":
-            days = [time.localtime(now - d * 86400) for d in (0, 1)]
-            files = [f for d in days for f in CODEX.glob(f"sessions/{d.tm_year:04d}/{d.tm_mon:02d}/{d.tm_mday:02d}/rollout-*.jsonl")
-                     if now - f.stat().st_mtime < 900]
-            return (agent_hooks.limits.codex_used(str(max(files, key=lambda f: f.stat().st_mtime)), now) if files else []) or codex_rate_read(now)
+        if agent == "codex":  # the account workers run under
+            return codex_windows(codex_main(), now)
         return agy_windows(agy_main(), now)  # the account workers run under
     except Exception:  # no numbers: unknown, which allows one worker
         return []
@@ -1407,7 +1437,7 @@ def start_worker(t: dict, tok: str, now: float, ws: dict = None) -> tuple:
         where = {**where, **{k: first[k] for k in ("base", "base_branch", "config") if first.get(k)}} if first else where
         yolo = bool(load("yolo.json", {}).get(t["agent"], {}).get("on"))
         rec = workers.start(t["agent"], t, token_store.machine().get("label") or socket.gethostname(), where, yolo, nonce,
-                            account=claude_main() if t["agent"] == "claude" else agy_main() if t["agent"] == "agy" else "")
+                            account={"claude": claude_main, "codex": codex_main, "agy": agy_main}[t["agent"]]())
     except Exception as e:
         release(t, tok)
         raise RuntimeError(f"could not start a {AGENTS[t['agent']][0]} worker: {e}") from e
@@ -1952,6 +1982,7 @@ def report(tok: str, ws: dict, lim: dict, wait: list, now: float, waiting=None, 
                      **({"cli": v} if (v := cli_version(a, now)) else {}), **({"channel": claude_channel()} if a == "claude" else {}),
                      **({"accounts": claude_accounts(now, ws)} if a == "claude" else {}),
                      **({"accounts": agy_listing(now)} if a == "agy" and agy_accounts.SUPPORTED else {}),
+                     **({"accounts": codex_listing(now)} if a == "codex" else {}),
                      "models": chat.models(a),  # what a chat may pick (cached for hours)
                      # the slash commands its last live chat here offered: long, so only when changed (the server keeps them)
                      **({"commands": c} if (c := chat.commands(a)) != _COMMANDS_SENT.get(a, (0, None))[1] or now - _COMMANDS_SENT[a][0] > 6 * 3600 else {}),
@@ -1967,8 +1998,9 @@ def report(tok: str, ws: dict, lim: dict, wait: list, now: float, waiting=None, 
     adopt_aliases(answer.get("aliases"))
     if isinstance(answer.get("claude_main"), str) and answer["claude_main"] != str(load("settings.json", {}).get("claudeMain") or ""):
         save_settings({"claudeMain": answer["claude_main"]})  # the owner's main account, chosen on the page
-    if isinstance(answer.get("agy_main"), str) and answer["agy_main"] != str(load("settings.json", {}).get("agyMain") or ""):
-        save_settings({"agyMain": answer["agy_main"]})
+    for ag in ("agy", "codex"):  # the owner's main account, chosen on the page: its workers run under it
+        if isinstance(answer.get(f"{ag}_main"), str) and answer[f"{ag}_main"] != str(load("settings.json", {}).get(f"{ag}Main") or ""):
+            save_settings({f"{ag}Main": answer[f"{ag}_main"]})
     _COMMANDS_SENT.update({a: (now, v["commands"]) for a, v in body["agents"].items() if "commands" in v})
     tools.TOKEN = str(answer.get("github_token") or "")  # for tool downloads only: agents keep their own gh login
     try:
@@ -2155,17 +2187,33 @@ def agy_remove(name: str) -> str:
     return said
 
 
-def agy_busy(name: str) -> list:
-    """What runs on agy account `name` now: its chats' ids and its workers' task ids."""
+def extra_busy(agent: str, name: str) -> list:
+    """What runs on `agent`'s (agy, Codex) account `name` now: its chats' ids and its workers' task ids."""
     with LOCK:
         ws = load("workers.json", {})
-    return chat.uses(name, "agy") + [w["id"] for w in ws.values() if w.get("agent") == "agy" and w.get("account") == name and w.get("status") == "running"]
+    return chat.uses(name, agent) + [w["id"] for w in ws.values() if w.get("agent") == agent and w.get("account") == name and w.get("status") == "running"]
+
+
+def codex_remove(name: str) -> str:
+    """Remove Codex account `name` and its kept usage reading (a new account of that name starts without it)."""
+    said = codex_accounts.remove(name)
+    (STATE / f"codex-rate-{name}.json").unlink(missing_ok=True)
+    return said
 
 
 def remove_waiting():
     """Remove each Claude or agy account whose Remove waited for its chats and workers; once, loudly when it fails."""
+    for name in codex_accounts.removing():
+        if extra_busy("codex", name):
+            continue
+        try:
+            chat.end_idle(name, "codex")
+            log("remote", "Codex account removed after its work ended", codex_remove(name))
+        except Exception as e:
+            log("error", f"Codex account {name} could not be removed", f"{type(e).__name__}: {e}"[:300])
+            accounts.write(codex_accounts.folder(name) / codex_accounts.INFO, {**accounts.info(codex_accounts.folder(name)), "removing": False, "error": f"Remove failed: {e}"[:300]})
     for name in agy_accounts.removing():
-        if agy_busy(name):
+        if extra_busy("agy", name):
             continue
         try:
             chat.end_idle(name, "agy")
@@ -2303,6 +2351,20 @@ def run_action(a: dict) -> str:
             return accounts.remove_later(name)
         chat.end_idle(name)  # an idle live chat on it would hold its folder
         return accounts.remove(name)
+    if act in ("codex_login", "codex_cancel", "codex_key", "codex_remove"):  # extra Codex accounts (codex_accounts.py)
+        name = str(args.get("account", ""))
+        codex_accounts.may(name, str(a.get("by") or ""), a.get("pc_owner") is True, act == "codex_remove")
+        if act == "codex_login":  # the link and code go to the page with the next report; codex ends once signed in
+            codex_accounts.login(name, by=str(a.get("by") or ""))
+            return f"{name}: open the sign-in link under Machines and enter the code shown there"
+        if act == "codex_cancel":
+            return codex_accounts.cancel(name)
+        if act == "codex_key":
+            return codex_accounts.set_key(name, str(args.get("key", "")), by=str(a.get("by") or ""))
+        if extra_busy("codex", name):  # in use: it goes once its chats and workers end (remove_waiting)
+            return codex_accounts.remove_later(name)
+        chat.end_idle(name, "codex")
+        return codex_remove(name)
     if act in ("agy_login", "agy_cancel", "agy_code", "agy_key", "agy_remove"):  # extra agy accounts (agy_accounts.py)
         name = str(args.get("account", ""))
         agy_accounts.may(name, str(a.get("by") or ""), a.get("pc_owner") is True, act == "agy_remove")
@@ -2315,7 +2377,7 @@ def run_action(a: dict) -> str:
             return agy_accounts.code(name, str(args.get("code", "")))
         if act == "agy_key":
             return agy_accounts.set_key(name, str(args.get("key", "")), by=str(a.get("by") or ""))
-        if agy_busy(name):  # in use: it goes once its chats and workers end (remove_waiting)
+        if extra_busy("agy", name):  # in use: it goes once its chats and workers end (remove_waiting)
             return agy_accounts.remove_later(name)
         chat.end_idle(name, "agy")
         return agy_remove(name)
@@ -2474,7 +2536,7 @@ def file_request(tok: str, f: dict):
         log("error", "Could not send a file answer to the web UI", f"{type(e).__name__}: {e}"[:300])
 
 
-SLOW_ACTIONS = {"claude_login", "claude_code", "agy_login", "agy_code"}  # a sign-in waits on claude or agy itself; it changes only its own account
+SLOW_ACTIONS = {"claude_login", "claude_code", "agy_login", "agy_code", "codex_login", "codex_key"}  # a sign-in waits on claude or agy itself; it changes only its own account
 
 
 def act_once(tok: str, a: dict, lock):
@@ -2530,7 +2592,7 @@ def live_loop():
         time.sleep(LIVE_EVERY)
 
 
-STATE_ACTIONS = {"agy_login", "agy_cancel", "agy_code", "agy_key", "agy_remove", "claude_budget", "claude_cancel", "claude_logout", "claude_login", "claude_code", "claude_token", "claude_key", "claude_remove", "install_tool", "remove_tool", "tool_auto", "yolo", "admin", "workers_allowed", "max_agents", "link_folder", "unlink_folder", "trust_hooks", "stop_worker", "restart", "merge", "takeover", "archive_worker", "apply_models"}
+STATE_ACTIONS = {"codex_login", "codex_cancel", "codex_key", "codex_remove", "agy_login", "agy_cancel", "agy_code", "agy_key", "agy_remove", "claude_budget", "claude_cancel", "claude_logout", "claude_login", "claude_code", "claude_token", "claude_key", "claude_remove", "install_tool", "remove_tool", "tool_auto", "yolo", "admin", "workers_allowed", "max_agents", "link_folder", "unlink_folder", "trust_hooks", "stop_worker", "restart", "merge", "takeover", "archive_worker", "apply_models"}
 
 
 # ---------------------------------------------------------------- the page
@@ -3510,7 +3572,10 @@ def main(argv: list):
             agy_accounts.token_text = real_tt
         # Remove of a Claude account in use: it waits for its chats and workers, then goes (remove_waiting)
         gone, in_use = [], {"werk": ["c1"]}
-        real_acc = (accounts.removing, accounts.remove, accounts.remove_later, accounts.may, chat.uses, chat.end_idle, agy_accounts.removing, agy_accounts.remove)
+        real_acc = (accounts.removing, accounts.remove, accounts.remove_later, accounts.may, chat.uses, chat.end_idle, agy_accounts.removing, agy_accounts.remove,
+                    codex_accounts.removing, codex_accounts.remove)
+        codex_gone, codex_accounts.removing = [], lambda: ["werk"]  # a Codex account of that name, a worker of its own on it
+        codex_accounts.remove = lambda n: codex_gone.append(n) or f"{n}: removed"
         accounts.removing, accounts.may = lambda: ["werk"], lambda *a: None
         accounts.remove, accounts.remove_later = lambda n: gone.append(n) or f"{n}: removed", lambda n: f"{n}: removed once its work ends"
         agy_gone, agy_accounts.removing = [], lambda: ["werk"]  # an agy account of the same name, not in use
@@ -3518,18 +3583,21 @@ def main(argv: list):
         chat.uses, chat.end_idle = lambda n, agent="claude": in_use.get(n, []) if agent == "claude" else [], lambda n, agent="claude": None
         try:
             assert run_action({"action": "claude_remove", "args": {"account": "werk"}}) == "werk: removed once its work ends"
+            save("workers.json", {"p/C-1": {"id": "C-1", "agent": "codex", "status": "running", "account": "werk"}})
             remove_waiting()
-            assert gone == [] and agy_gone == ["werk"], "a chat still works on the Claude one; the agy one of that name goes"
+            assert gone == [] and agy_gone == ["werk"] and codex_gone == [], \
+                "a chat still works on the Claude one, a worker on the Codex one; the agy one of that name goes"
             agy_accounts.removing = lambda: []
             in_use.clear()
             save("workers.json", {"p/T-1": {"id": "T-1", "status": "running", "account": "werk"}})
             remove_waiting()
-            assert gone == [] and account_busy("werk") == ["T-1"], "a worker still runs on it"
+            assert gone == [] and account_busy("werk") == ["T-1"] and codex_gone == ["werk"], "a worker still runs on it; the Codex one's ended"
             save("workers.json", {})
             remove_waiting()
             assert gone == ["werk"], gone
         finally:
-            accounts.removing, accounts.remove, accounts.remove_later, accounts.may, chat.uses, chat.end_idle, agy_accounts.removing, agy_accounts.remove = real_acc
+            (accounts.removing, accounts.remove, accounts.remove_later, accounts.may, chat.uses, chat.end_idle, agy_accounts.removing, agy_accounts.remove,
+             codex_accounts.removing, codex_accounts.remove) = real_acc
         real_fqdn, socket.getfqdn = socket.getfqdn, lambda *a: sys.exit("LocalServer must not ask reverse DNS at its start")
         # A watched background shell: its file's tail goes to the server, once per change (again after 5 s); others nothing.
         sent, real_srv, out = [], globals()["server"], Path(tmp_state) / "b1.output"

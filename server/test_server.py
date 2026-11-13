@@ -1711,6 +1711,30 @@ def share_contract(tmp, ck, fr, raw, er, et):
     assert ui("/ui/api/chat/send", {"machine": mid, "id": made["id"], "text": "hi"}, er)[0] == 200 and turn_acc() == [("erin", None)]
     http("POST", "/machine/chats/events", {"chat": made["id"], "events": [], "done": True}, token=fr, headers=pc)
     assert amain("", er) == 200
+    # Codex accounts: the same rules; a device sign-in shows its link and one-time code to its owner only
+    caccs = [{"id": "", "kind": "login", "email": "alice@example.org"}, {"id": "home", "kind": "login", "by": "alice"},
+             {"id": "erin", "by": "erin", "login": "https://auth.openai.com/codex/device", "usercode": "ABCD-EFGH2"},
+             {"id": "odd", "by": "erin", "login": "https://auth.openai.com/codex/device", "usercode": "<b>x</b>"}]
+    xrep = {**rep, "agents": {**rep["agents"], "codex": {"accounts": caccs}}}
+    http("POST", "/machine/report", xrep, token=fr, headers=pc)
+    theirs = {a["id"]: a for a in rows(er)[mid]["agents"]["codex"]["accounts"]}
+    assert list(theirs) == ["", "erin", "odd"] and theirs["erin"]["usercode"] == "ABCD-EFGH2" and "usercode" not in theirs["odd"] \
+        and not theirs[""]["email"], theirs
+    assert act("codex_login", {"account": "home"}, er) == 403 and act("codex_login", {"account": ""}) == 400
+    assert act("codex_key", {"account": "erin", "key": "AIza" + "k" * 35}, er) == 400 and act("codex_key", {"account": "erin", "key": "sk-proj-" + "k" * 30}, er) == 200
+    assert act("codex_cancel", {"account": "erin"}, er) == 200 and act("codex_remove", {"account": "erin"}) == 200
+    queued = json.loads(http("GET", "/machine/actions", token=fr, headers=pc)[1])["actions"]
+    assert [a["action"] for a in queued] == ["codex_key", "codex_cancel", "codex_remove"] and "sk-proj" not in json.dumps(rows(er)[mid]["actions"]), queued
+    for a in queued:
+        http("POST", "/machine/actions/result", {"id": a["id"], "ok": True}, token=fr, headers=pc)
+    cmain = lambda acc, h=ck: ui("/ui/api/machines/claude-main", {"machine": mid, "account": acc, "agent": "codex"}, h)[0]
+    assert cmain("erin", er) == 200 and rows(er)[mid]["codexMain"] == "erin" and rows(er)[mid]["agyMain"] == ""
+    assert cmain("home") == 200 and json.loads(http("POST", "/machine/report", xrep, token=fr, headers=pc)[1])["codex_main"] == "home"
+    made = json.loads(ui("/ui/api/chats", {"machine": mid, "agent": "codex", "folder": "/home/x/garden"}, er)[2])["chat"]
+    assert made["account"] == "erin", made
+    assert ui("/ui/api/chat/send", {"machine": mid, "id": made["id"], "text": "hi"}, er)[0] == 200 and turn_acc() == [("erin", None)]
+    http("POST", "/machine/chats/events", {"chat": made["id"], "events": [], "done": True}, token=fr, headers=pc)
+    assert cmain("", er) == 200 and cmain("") == 200
     http("POST", "/machine/report", rep, token=fr, headers=pc)
     # Files on a pc shared for use: only that project's folders, the request names the project for the companion, and
     # the owner's token answers it.
