@@ -1379,12 +1379,18 @@ function ckPicker(card) {
   }
   menu.append(sum, panel);
   // fixed to the viewport: a small grid card (overflow hidden) would clip the panel
-  menu.addEventListener("toggle", () => {
-    if (!menu.open) return;
-    const r = sum.getBoundingClientRect(), w = Math.min(460, innerWidth - 16);
-    Object.assign(panel.style, { position: "fixed", top: "auto", right: "auto", width: `${w}px`, bottom: `${innerHeight - r.top + 8}px`,
-      left: `${Math.max(8, Math.min(r.left, innerWidth - w - 8))}px`, maxHeight: `${Math.max(160, r.top - 16)}px` });
-  });
+  // placed at the click itself (the toggle event comes a task later: one frame where CSS alone placed it) and at
+  // every open (a rebuilt chip opened by code)
+  const place = () => {
+    // above the chip, or below when there is more room there; always inside the window, also for a chip near an edge
+    const r = sum.getBoundingClientRect(), w = Math.min(460, innerWidth - 16), up = r.top >= innerHeight - r.bottom;
+    const h = Math.max(160, Math.min((up ? r.top : innerHeight - r.bottom) - 16, innerHeight - 16));
+    const edge = `${Math.min(Math.max(8, up ? innerHeight - r.top + 8 : r.bottom + 8), innerHeight - h - 8)}px`;
+    Object.assign(panel.style, { position: "fixed", right: "auto", width: `${w}px`, top: up ? "auto" : edge, bottom: up ? edge : "auto",
+      left: `${Math.max(8, Math.min(r.left, innerWidth - w - 8))}px`, maxHeight: `${h}px` });
+  };
+  sum.addEventListener("click", () => { if (!menu.open) place(); });
+  menu.addEventListener("toggle", () => { if (menu.open) place(); });
   card.picks.replaceChildren(menu, ...(draft ? [ckDraftFolder(card)] : []));
 }
 // Esc closes the model panel and the Snooze menu (a click outside: nav.js, for every menu); a click or Esc drops the
