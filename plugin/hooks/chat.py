@@ -1248,6 +1248,7 @@ class Live:
         self.admin = item.get("admin")  # None: admin is off on this pc; True/False: this chat may (not) have it (admin.py)
         self.asked = self.pick  # the chat's own choice ("" = default); pick may name the default (Codex)
         self.account = account_of(item)
+        self.guest = bool(item.get("guest"))  # a new process after a Force keeps the guard's guest mark
         self.st = {"session": item.get("session") or "", **({"account": self.account} if self.account else {})}
         self.lock, self.buf, self.flushed, self.last = threading.Lock(), [], time.time(), time.time()
         self.written = self.taken = 0  # messages written in, and echoed back as taken
@@ -1273,7 +1274,7 @@ class Live:
 
     def live_state(self) -> dict:
         """What was written to the agent, kept at every write."""
-        return {"chat": self.cid, "agent": self.agent, "folder": self.folder, "yolo": self.yolo, "admin": self.admin, "pick": list(self.pick), "account": self.account,
+        return {"chat": self.cid, "agent": self.agent, "folder": self.folder, "yolo": self.yolo, "admin": self.admin, "pick": list(self.pick), "account": self.account, "guest": self.guest,
                 "asked": list(self.asked), "session": self.st["session"], "allow": list(self.rec.get("allow", [])),
                 "in": in_size(self.p.d), "written": self.written, "turn_open": self.turn_open, "busy": self.busy,  # a send sets them
                 "slash": sorted(x for x in self.slash if x > self.taken)}
@@ -1294,7 +1295,7 @@ class Live:
         """The agent a companion before this one ran, read on from where that one saved."""
         self = cls.__new__(cls)
         self.setup({"chat": s["chat"], "agent": s["agent"], "folder": s["folder"], "session": s["session"], "admin": s.get("admin"),
-                    "account": s.get("account", "")}, post, log, s["yolo"])
+                    "account": s.get("account", ""), "guest": s.get("guest", False)}, post, log, s["yolo"])
         self.pick, self.asked = tuple(s["pick"]), tuple(s["asked"])
         self.written, self.taken, self.turn_open, self.busy, self.subs = s["written"], s["taken"], s["turn_open"], s["busy"], set(s["subs"])
         self.bg, self.bg_out = dict(s.get("bg") or {}), dict(s.get("bg_out") or {})
@@ -2031,8 +2032,10 @@ class AgyLive(CodexLive):
         with self.lock:
             self.buf.append(("info", "Stopped this step; your message goes in now (agy has no interrupt: a new agy takes the conversation on)."))
             self.flush()
+        # the same account and guest mark: never the pc owner's own sign-in or checkout after a Force
         item = {"chat": self.cid, "agent": "agy", "folder": self.folder, "session": self.st["session"], "text": text,
-                "model": self.asked[0], "effort": self.asked[1], "allow": self.rec.get("allow", []), "admin": self.admin}
+                "model": self.asked[0], "effort": self.asked[1], "allow": self.rec.get("allow", []), "admin": self.admin,
+                "account": self.account, **({"guest": True} if self.guest else {})}
         try:  # the same server turn goes on in the new process (made outside START_LOCK: its start may take a while)
             lv = AgyLive(item, self.post, self.log, self.yolo)
         except Exception as e:
@@ -2282,6 +2285,26 @@ def self_test():
     assert lv.command("agy") == ["agy", "acp", "--gemini-dir", str(agy_accounts.folder("werk"))]
     lv.yolo, lv.account = True, ""
     assert lv.stream and lv.command("agy")[1] != "acp", "the pc's own YOLO chat keeps agy's stream-json line"
+    # a Force hands the chat to a new agy: on the same account, and a guest's stays a guest's (the guard's mark)
+    made, real_agy = [], AgyLive
+    class Took(Exception):
+        pass
+
+    def fake_agy(item, *a):
+        made.append(item)
+        raise Took("stop here")
+    lv = AgyLive.__new__(AgyLive)
+    lv.lock, lv.force_text, lv.carry, lv.bg, lv.bg_out, lv.subs, lv.sub_convs = threading.Lock(), "go", [], {}, {}, set(), {}
+    lv.active_box = lv.active_id = None
+    lv.p, lv.buf, lv.flush = types.SimpleNamespace(wait=lambda: 0, d=Path(tempfile.mkdtemp())), [], lambda: None
+    lv.cid, lv.folder, lv.st, lv.asked, lv.rec, lv.admin = "f", "/x", {"session": "s"}, ("", ""), {"allow": []}, None
+    lv.account, lv.guest, lv.yolo, lv.post, lv.log = "werk", True, True, lambda *a: None, lambda *a: None
+    globals()["AgyLive"] = fake_agy
+    try:
+        lv.gone()
+    finally:
+        globals()["AgyLive"] = real_agy
+    assert made and made[0]["account"] == "werk" and made[0]["guest"] is True, made
     asks_tmp = tempfile.TemporaryDirectory()  # never the real companion's asks folder
     workers.ASKS = Path(asks_tmp.name)
     f = workers.remember_ask("c-x", "zet het in D:\\Games")

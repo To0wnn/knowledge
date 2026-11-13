@@ -189,9 +189,19 @@ def code(name: str, text: str, wait: float = 90) -> str:
     if rec["p"].returncode != 0:
         accounts.write(d / INFO, {**accounts.info(d), "error": said[-300:]})
         raise RuntimeError(f"sign-in failed: {said[-200:]}")
+    if not own_token(d):  # it must be this account's own: a token in a linked folder would be every account's
+        said = "agy said it signed in, but no token file landed in this account's own folder: do not use it (agy may have changed where it keeps it)"
+        accounts.write(d / INFO, {**accounts.info(d), "error": said})
+        raise RuntimeError(said)
     email = next((m.group(0) for x in rec["out"] if (m := re.search(r"[\w.+-]+@[\w-]+(\.[\w-]+)+", x))), "")
     accounts.write(d / INFO, {**accounts.info(d), "kind": "login", "email": email[:120], "error": "", "at": int(time.time())})
     return f"{name}: signed in" + (f" as {email}" if email else "")
+
+
+def own_token(d: Path) -> bool:
+    """A token file of agy's own (antigravity-cli/antigravity-oauth-token when there is no keyring) in account folder
+    d itself, not behind a link."""
+    return any("token" in p.name and p.is_file() and not accounts.is_link(p) for p in (d / APP).iterdir()) if (d / APP).is_dir() else False
 
 
 def remove_later(name: str) -> str:
@@ -286,7 +296,9 @@ def self_test():
             "c = sys.stdin.readline().strip()\n"
             "if c != '4/good-code':\n"
             "    print('login failed: invalid_grant'); sys.exit(1)\n"
-            "open(os.path.join(d, 'antigravity-cli', 'token'), 'w').write('t'); print('Logged in as w@example.org')\n", encoding="utf-8")
+            "if not os.environ.get('FAKE_AGY_NO_TOKEN'):\n"
+            "    open(os.path.join(d, 'antigravity-cli', 'token'), 'w').write('t')\n"
+            "print('Logged in as w@example.org')\n", encoding="utf-8")
         (fake / "agy").write_text(f'#!/bin/sh\nexec "{sys.executable}" "{fake / "fake_agy.py"}" "$@"\n', encoding="utf-8")
         (fake / "agy").chmod(0o755)
         os.environ["PATH"] = str(fake) + os.pathsep + was_path
@@ -306,6 +318,17 @@ def self_test():
             assert "invalid_grant" in str(e), e
         login("thuis")
         assert code("thuis", " 4/good-code ") == "thuis: signed in as w@example.org"
+        (folder("thuis") / APP / "token").unlink()
+        os.environ["FAKE_AGY_NO_TOKEN"] = "1"
+        login("thuis")
+        try:
+            code("thuis", "4/good-code")
+            raise AssertionError("a sign-in without a token of its own must fail")
+        except RuntimeError as e:
+            assert "no token file" in str(e), e
+        del os.environ["FAKE_AGY_NO_TOKEN"]
+        login("thuis")
+        code("thuis", "4/good-code")
         a = {a["id"]: a for a in listing()}["thuis"]
         assert (a["kind"], a["email"], a["by"], a["error"]) == ("login", "w@example.org", "bob", "") and "login" not in a, a
         login("t3")

@@ -3451,14 +3451,17 @@ def main(argv: list):
         globals()["installed"], globals()["plugin_version"], self_update.run, globals()["keep_trusted"] = real
         # Remove of a Claude account in use: it waits for its chats and workers, then goes (remove_waiting)
         gone, in_use = [], {"werk": ["c1"]}
-        real_acc = (accounts.removing, accounts.remove, accounts.remove_later, accounts.may, chat.uses, chat.end_idle)
+        real_acc = (accounts.removing, accounts.remove, accounts.remove_later, accounts.may, chat.uses, chat.end_idle, agy_accounts.removing, agy_accounts.remove)
         accounts.removing, accounts.may = lambda: ["werk"], lambda *a: None
         accounts.remove, accounts.remove_later = lambda n: gone.append(n) or f"{n}: removed", lambda n: f"{n}: removed once its work ends"
-        chat.uses, chat.end_idle = lambda n: in_use.get(n, []), lambda n: None
+        agy_gone, agy_accounts.removing = [], lambda: ["werk"]  # an agy account of the same name, not in use
+        agy_accounts.remove = lambda n: agy_gone.append(n) or f"{n}: removed"
+        chat.uses, chat.end_idle = lambda n, agent="claude": in_use.get(n, []) if agent == "claude" else [], lambda n, agent="claude": None
         try:
             assert run_action({"action": "claude_remove", "args": {"account": "werk"}}) == "werk: removed once its work ends"
             remove_waiting()
-            assert gone == [], "a chat still works on it"
+            assert gone == [] and agy_gone == ["werk"], "a chat still works on the Claude one; the agy one of that name goes"
+            agy_accounts.removing = lambda: []
             in_use.clear()
             save("workers.json", {"p/T-1": {"id": "T-1", "status": "running", "account": "werk"}})
             remove_waiting()
@@ -3467,7 +3470,7 @@ def main(argv: list):
             remove_waiting()
             assert gone == ["werk"], gone
         finally:
-            accounts.removing, accounts.remove, accounts.remove_later, accounts.may, chat.uses, chat.end_idle = real_acc
+            accounts.removing, accounts.remove, accounts.remove_later, accounts.may, chat.uses, chat.end_idle, agy_accounts.removing, agy_accounts.remove = real_acc
         real_fqdn, socket.getfqdn = socket.getfqdn, lambda *a: sys.exit("LocalServer must not ask reverse DNS at its start")
         # A watched background shell: its file's tail goes to the server, once per change (again after 5 s); others nothing.
         sent, real_srv, out = [], globals()["server"], Path(tmp_state) / "b1.output"

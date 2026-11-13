@@ -314,6 +314,9 @@ fixed remote actions and relays chats. Installing it is part of the client setup
   `DBUS_SESSION_BUS_ADDRESS=unix:path=/nonexistent/...`: without it, it would run as the pc's own account, and a
   sign-in would replace the pc's own in the keyring. The agent's own shell commands inherit that (no keyring for
   them, e.g. a git credential helper on libsecret); the knowledge plugin gets its token as `KNOWLEDGE_TOKEN`.
+- **Checked after a sign-in:** agy must have left a token file in the account's own `antigravity-cli/` (not behind a
+  link); otherwise the sign-in fails with that said, so a sign-in never quietly lands in a shared folder. A Force
+  (a new agy takes the conversation on) keeps the chat's account and a guest's mark.
 - **Not (yet):** macOS and Windows (the Keychain and Credential Manager cannot be hidden from one process), workers
   (they keep the pc's own sign-in), an API key (`GEMINI_API_KEY`), and the usage of an extra account.
 
