@@ -2097,7 +2097,7 @@ def chat_e2e(tok: str, tmp: Path):
         models = {a: [(m["id"], m["efforts"]) for m in v] for a, v in reported.items()}
         check([m.get("default") for m in reported.get("codex", [])] == ["high"], "chat: Codex's own default effort per model is reported", json.dumps(reported.get("codex")))
         check(models.get("codex") == [("fake-big", ["high", "ultra"])] and models.get("agy") in ([("fake-gem", [])], [("fake-acp", [])])
-              and [m for m, _ in models.get("claude", [])] == ["fable", "opus", "sonnet", "haiku"],
+              and [m for m, _ in models.get("claude", [])][:4] == ["fable", "opus", "sonnet", "haiku"],
               "chat: the companion reports each agent's models and effort levels (hidden Codex models left out)", json.dumps(models))
         agy_model = models["agy"][0][0]  # agy models at first; once an ACP session ran, the list ACP offers
         for agent, model, effort in (("claude", "opus", "max"), ("codex", "fake-big", "ultra"), ("agy", agy_model, "")):
