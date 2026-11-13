@@ -10,7 +10,8 @@ fixed remote actions and relays chats. Installing it is part of the client setup
   each task with `POST /tasks/woken` for its worker session first and gives it back when the start fails), keeps
   their leases while they run and reports the machine's state (`POST /machine/report`). On request it trusts the
   knowledge hooks the agents' own way (Codex: `codex app-server` `hooks/list` + `config/batchWrite`, again after every
-  plugin update; Claude Code: `hasTrustDialogAccepted` in `~/.claude.json`; agy: `trustedWorkspaces`), only for folders
+  plugin update, also the hooks of a Codex plugin a tool add-on installs, such as ponytail: after its upgrade Codex
+  marks them modified and skips them, shown only as "hook: SessionStart Failed"; Claude Code: `hasTrustDialogAccepted` in `~/.claude.json`; agy: `trustedWorkspaces`), only for folders
   with a `.knowledge-project`. Its Folders section lists the linked folders and candidates (git checkouts up to three
   levels under your home folder and folders agents worked in, also elsewhere on the pc, not in the temp folder) and
   links one to a project the token may write by writing `.knowledge-project`, as the knowledge-init skill does; unlink

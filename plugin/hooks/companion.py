@@ -627,9 +627,16 @@ def unlink_folder(path: str) -> str:
 # ---------------------------------------------------------------- hook trust
 
 def ours(hook: dict) -> bool:
-    """Only the knowledge hooks: a repo's own .codex/hooks.json must keep asking its user."""
-    return str(hook.get("pluginId") or "").startswith("knowledge@") or any(
+    """The knowledge hooks and those of a Codex plugin a tool add-on installs (ponytail): after each upgrade Codex marks
+    them modified and skips them as "Failed" until trusted again. A repo's own .codex/hooks.json keeps asking its user."""
+    return str(hook.get("pluginId") or "").startswith("knowledge@") or hook.get("pluginId") in tool_plugins() or any(
         s in str(hook.get("command") or "") for s in ("agent_hooks.py", "knowledge-agent.py"))
+
+
+def tool_plugins() -> set:
+    """Codex plugin ids that a tool manifest installs (`codex plugin add <id>`)."""
+    return {s["run"][3] for m in tools.catalog().values() for s in m.get("install", [])
+            if s.get("agent") == "codex" and s["run"][:3] == ["codex", "plugin", "add"] and len(s["run"]) > 3}
 
 
 def app_server_rpc(calls) -> list:
@@ -694,8 +701,9 @@ def trust_codex(folders: list) -> int:
 
 
 def codex_fingerprint() -> str:
-    """Changes with every knowledge plugin update (a new cache folder) or a rewritten hooks.json: then trust again."""
-    files = sorted(CODEX.glob("plugins/cache/*/knowledge/*/.codex-plugin/plugin.json")) + [CODEX / "hooks.json"]
+    """Changes with every plugin update (a new cache folder, also a tool's plugin) or a rewritten hooks.json: then trust
+    again (only the hooks ours() accepts)."""
+    files = sorted(CODEX.glob("plugins/cache/*/*/*/.codex-plugin/plugin.json")) + [CODEX / "hooks.json"]
     return hashlib.sha256(repr([(str(f), f.stat().st_mtime) for f in files if f.exists()]).encode()).hexdigest()[:16]
 
 
@@ -3631,6 +3639,7 @@ def main(argv: list):
         assert json_set(d, ("p", "m"), MISSING) == "b" and d == {"a": 1, "p": {}}
         assert no_window(0) == CREATE_NO_WINDOW and no_window(0x200) == 0x200 | CREATE_NO_WINDOW and no_window(DETACHED_PROCESS) == DETACHED_PROCESS
         assert ours({"pluginId": "knowledge@knowledge"}) and not ours({"pluginId": "other@x", "command": "x.sh"})
+        assert "ponytail@ponytail" in tool_plugins() and ours({"pluginId": "ponytail@ponytail"}), tool_plugins()
         globals()["CLAUDE_JSON"] = HOME / ".knowledge-companion-self-test-missing.json"
         assert untrusted("claude", ["/x"]) == [], "Claude never ran here: nothing to trust, no trust round every minute"
         # Whether this pc may start a worker: off by default, game, limit (unknown: one), max, a linked folder.
