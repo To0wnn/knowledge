@@ -1729,7 +1729,12 @@ function accountTiming(a) {
   }
   return parts.join(" · ");
 }
+// Signed in: an email or a sign-in kind; a signed-out account's usage windows are from before, so they are not shown.
+const accountSignedIn = (a) => !!(a.pc || a.email || a.kind);
+// The order people pick from: their main account first, signed-out ones last, otherwise as the pc lists them.
+const accountOrder = (list, main) => [...list].sort((a, b) => (b.id === main) - (a.id === main) || accountSignedIn(b) - accountSignedIn(a));
 function accountUsage(a) {
+  if (!accountSignedIn(a)) return "";
   if (a.kind === "apikey") return a.budget ? `$${(a.spent || 0).toFixed(2)} of $${a.budget} (${Math.round(((a.spent || 0) / a.budget) * 100)}%)` : `$${(a.spent || 0).toFixed(2)} spent this month`;
   return usageWindows(a).map(([p, n, r]) => `${usageSpan(n) || n} ${Math.round(p)}%${r ? ` · resets ${leftWhen(r)}` : ""}`).join(" · ");
 }

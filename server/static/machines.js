@@ -578,7 +578,7 @@ function accountsCell(m) {
   if (!ag) return null;
   if (!ag.accounts) return val(steersAgent(m, "claude") ? "Update the plugin to add accounts" : "—", "muted");
   const box = el("div", "mx-accounts"), steer = accountSteer(m), main = m.claudeMain || "";
-  for (const x of ag.accounts) {
+  for (const x of accountOrder(ag.accounts, main)) {
     const line = el("div", "mx-account"), mine = x.mine !== false;
     // the pc's own on a token or key: chats and workers use that, the terminal keeps the sign-in shown beside it
     const kindLabel = x.kind === "token" ? (x.preview ? `long-lived token (${x.preview})` : "long-lived token")
@@ -594,7 +594,7 @@ function accountsCell(m) {
     if (!mine) line.append(" ", val(`added by ${x.by || "?"}`, "muted"));
     const timing = accountTiming(x);
     if (timing) line.append(" ", val(timing, "muted"));
-    if (!x.pc && (usageWindows(x).length || x.kind === "apikey")) line.append(accountBars(x));
+    if (!x.pc && accountSignedIn(x) && (usageWindows(x).length || x.kind === "apikey")) line.append(accountBars(x));
     if (x.error) line.append(el("p", "machine-error", x.error));
     const acts = [];
     if (steer && mine && x.id !== main) {

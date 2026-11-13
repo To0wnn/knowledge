@@ -765,14 +765,15 @@ async def cockpit_shell(browser, devices, secret: str) -> None:
             check(stays == (1 if has_levels else 0) or stays == 1, f"model chip: after a model the panel stays open for its effort ({stays}, levels {has_levels})")
         await pg.mouse.click(5, 5)
         check(not await pg.locator("#ck-canvas details.ck-model[open]").count(), "model chip: a click outside closes the panel")
-        # an extra Claude account on the draft's pc: an Account row with the pc's own sign-in first; it shows in the chip
+        # an extra Claude account on the draft's pc: an Account row, the main one first (the pc's own by default); it shows in the chip
         accs = await pg.evaluate("""(() => { const card = [...ck.cards.values()].find((c) => c.meta.draft); if (!card || !ckAccounts(card).length) return null;
           card.pick = { ...card.pick, agent: 'claude', account: '' }; delete card.picks.dataset.sig; ckPicker(card);
           document.querySelector('#ck-canvas details.ck-model').open = true;
           const b = [...document.querySelectorAll('#ck-canvas .ck-account button')], names = b.map((x) => x.firstChild.textContent.replace(' (main)', ''));
-          b[1]?.click(); return [names, document.querySelector('#ck-canvas .ck-model summary').textContent, card.pick.account]; })()""")
+          const first = b[0]?.firstChild.textContent.endsWith(' (main)') || (ckAccPc(card)?.claudeMain || '') === '' && names[0] === 'own';
+          b[1]?.click(); return [names, document.querySelector('#ck-canvas .ck-model summary').textContent, card.pick.account, first]; })()""")
         if accs:
-            check(accs[0][0] == "own" and len(accs[0]) >= 2 and accs[2] == accs[0][1] and accs[1].endswith(accs[0][1]), f"model chip: Account row, own first, the pick in the chip {accs}")
+            check(accs[3] and len(accs[0]) >= 2 and accs[2] == accs[0][1] and accs[1].endswith(accs[0][1]), f"model chip: Account row, main first, the pick in the chip {accs}")
             if os.environ.get("KNOWLEDGE_SMOKE_SHOTS"):
                 await pg.evaluate("document.querySelector('#ck-canvas details.ck-model').open = true")
                 await pg.locator("#ck-canvas .ck-model-list").screenshot(path=os.path.join(os.environ["KNOWLEDGE_SMOKE_SHOTS"], "chat-accounts.png"))
