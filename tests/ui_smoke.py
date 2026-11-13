@@ -2506,7 +2506,7 @@ async def grid_groups(browser, secret: str) -> None:
     await pg.evaluate("$('bd-stage').focus()")
     await pg.keyboard.press("n")
     check(await pg.evaluate("document.activeElement.tagName") == "TEXTAREA" and await pg.evaluate("document.activeElement.value") == "n", "Keys: a bare n on the grid is text, in a box")
-    await pg.evaluate("document.activeElement.value = ''")
+    await pg.keyboard.press("Backspace")  # as a person clears it: a value set by script left the kept draft "n" behind for later new chats
     await pg.focus(t3)
     await pg.keyboard.press("Alt+KeyN")
     await pg.wait_for_function(f"document.activeElement === document.querySelector('{d}')", timeout=5000)
@@ -2583,9 +2583,10 @@ async def grid_groups(browser, secret: str) -> None:
     check(await other.evaluate("!document.querySelector('.bd-card.draft') && !ck.cards.has(ckKey(CK_DRAFT))"), "Parts: an empty new chat stays behind when you switch")
     late = await other.evaluate("""(async () => { const real = ckSummary, ms = ck.machines; let go;
       ck.machines = []; ckSummary = () => new Promise((r) => { go = r; });  // a slow list of pcs
-      try { bdPartShow(8); bdPartShow(0); go(); await new Promise((r) => setTimeout(r, 50)); }
+      ckDrop(ckKey(CK_DRAFT)); bdRender();
+      try { bdPartShow(8); bdPartShow(0); go?.(); await new Promise((r) => setTimeout(r, 50)); }
       finally { ckSummary = real; ck.machines = ms; }
-      return !ck.cards.has(ckKey(CK_DRAFT)) && !document.querySelector('.bd-card.draft'); })()""")
+      return !!go && !ck.cards.has(ckKey(CK_DRAFT)) && !document.querySelector('.bd-card.draft'); })()""")
     check(late, "Parts: a new chat whose pcs came late does not land in the part you went on to")
     await other.evaluate("bdPartShow(7)")
     await other.wait_for_selector(".bd-card.draft", timeout=5000)
