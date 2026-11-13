@@ -701,7 +701,7 @@ const ACCOUNT_WAYS = [
   ["apikey", "API key", "An API key from the Anthropic Console (console.anthropic.com > API keys). Billed per use, not the subscription.", "sk-ant-api03-…", "sk-ant-api\\d\\d-[\\w\\-]{20,400}"]];
 function accountAdd(m, account = null) { // null: a new account; "": the pc's own; a name: that account
   const name = el("input"), secret = el("input"), ways = el("div", "seg"), about = el("p", "muted");
-  name.required = true; name.pattern = "[a-z0-9][a-z0-9\\-]{0,30}"; name.placeholder = "e.g. work"; name.title = "a-z, 0-9 and -";
+  name.required = true; name.pattern = "[A-Za-z0-9][A-Za-z0-9\\-]{0,30}"; name.placeholder = "e.g. work"; name.title = "letters, digits and -, at most 31 (stored lowercase: a folder name on case-blind disks)";
   if (account !== null) { name.value = account; name.readOnly = true; }
   secret.type = "password"; secret.autocomplete = "off";
   ways.setAttribute("role", "group"); ways.setAttribute("aria-label", "How it signs in");
@@ -717,8 +717,8 @@ function accountAdd(m, account = null) { // null: a new account; "": the pc's ow
     : account === "" ? ["Browser signs ~/.claude itself in again (the terminal too). A long-lived token or API key runs this pc's chats and workers on it instead; the terminal keeps its own sign-in. Browser again drops the token or key."] : [];
   const shown = accountForm(account === "" ? `This pc's own Claude on ${m.label}` : account ? `Sign ${account} in on ${m.label}` : `Add a Claude account on ${m.label}`,
     [...intro, ways, about], [...(account === null ? [["Name", name]] : []), ["Token", secret]], account === null ? "Add" : "Sign in", () => (way[0] === "login"
-      ? machineAction(m, "claude_login", { account: name.value, setup: false })
-      : machineAction(m, way[0] === "token" ? "claude_token" : "claude_key", { account: name.value, [way[0] === "token" ? "token" : "key"]: secret.value.trim() })));
+      ? machineAction(m, "claude_login", { account: name.value.toLowerCase(), setup: false })
+      : machineAction(m, way[0] === "token" ? "claude_token" : "claude_key", { account: name.value.toLowerCase(), [way[0] === "token" ? "token" : "key"]: secret.value.trim() })));
   pick(way);
   return shown;
 }
