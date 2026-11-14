@@ -12,6 +12,7 @@ Standard library only, works on Windows.
 import hashlib
 import os
 import re
+import subprocess
 import sys
 from pathlib import Path
 
@@ -54,7 +55,7 @@ def own_file(agent: str):
 def claude_excludes() -> bool:
     """True when a settings file Claude Code reads names claudeMdExcludes: then it may skip an imported rule file that
     still stands in CLAUDE.md (tested 14 Nov 2026: house_rules.md was gone), so Claude claims nothing. A --settings flag
-    on the command line is out of a hook's sight."""
+    on the command line is checked in claude_flags."""
     cfg = Path(os.environ.get("CLAUDE_CONFIG_DIR") or Path.home() / ".claude")
     project = Path(os.environ.get("CLAUDE_PROJECT_DIR") or os.getcwd())
     files = [cfg / "settings.json", cfg / "settings.local.json", project / ".claude" / "settings.json",
@@ -62,7 +63,46 @@ def claude_excludes() -> bool:
              Path("/Library/Application Support/ClaudeCode/managed-settings.json"),
              Path(os.environ.get("ProgramData") or "C:/ProgramData") / "ClaudeCode" / "managed-settings.json",
              Path(os.environ.get("ProgramFiles") or "C:/Program Files") / "ClaudeCode" / "managed-settings.json"]
-    return any("claudeMdExcludes" in read(f) for f in files)
+    return any("claudeMdExcludes" in read(f) for f in files) or claude_flags()
+
+
+def ancestors(limit: int = 8) -> list:
+    """The command lines of the processes above this hook (Claude Code itself is one of them): /proc on Linux, ps on
+    macOS. Windows: none (no cheap way to read another process's arguments); shortcut: a --settings flag with
+    claudeMdExcludes on Windows stays unseen, upgrade if anything of ours ever starts Claude that way."""
+    pid, out, top = os.getppid(), [], int(os.environ.get("KNOWLEDGE_NATIVE_TOP") or 0)  # top: the self-test's own process
+    for _ in range(limit):
+        if pid <= 1 or pid == top:
+            break
+        try:
+            if Path(f"/proc/{pid}/cmdline").exists():
+                args = [a.decode("utf-8", "replace") for a in Path(f"/proc/{pid}/cmdline").read_bytes().split(b"\0") if a]
+                ppid = int(Path(f"/proc/{pid}/stat").read_text().rsplit(")", 1)[1].split()[1])
+            elif sys.platform == "darwin":
+                ppid_s, _, line = subprocess.run(["ps", "-o", "ppid=", "-o", "args=", "-p", str(pid)], capture_output=True,
+                                                  text=True, timeout=2).stdout.strip().partition(" ")
+                ppid, args = int(ppid_s), line.split()
+            else:
+                break
+        except (OSError, ValueError, IndexError, subprocess.SubprocessError):
+            break
+        out.append(args)
+        if args and Path(args[0]).name.lower() in ("claude", "claude.exe"):
+            break  # Claude Code itself: only its flags count, not those of whatever started it
+        pid = ppid
+    return out
+
+
+def claude_flags() -> bool:
+    """claudeMdExcludes in a --settings flag of a process above this hook: inline JSON or a settings file it names."""
+    for args in ancestors():
+        if any("claudeMdExcludes" in a for a in args):
+            return True
+        for i, a in enumerate(args):
+            path = args[i + 1] if a == "--settings" and i + 1 < len(args) else a[len("--settings="):] if a.startswith("--settings=") else ""
+            if path and "claudeMdExcludes" in read(Path(path)):
+                return True
+    return False
 
 
 def shared_text(path: Path, shared: Path) -> str:
@@ -90,6 +130,8 @@ def native(agent: str, shared: Path = None) -> str:
 
 def self_test():
     import tempfile
+    global ancestors
+    real, ancestors = ancestors, lambda limit=8: []  # whatever started this test (a shell naming the word) does not count
     with tempfile.TemporaryDirectory() as t:
         home = Path(t)
         shared = home / ".claude" / "gedeeld"
@@ -105,6 +147,15 @@ def self_test():
         (home / ".claude" / "settings.json").write_text('{"claudeMdExcludes": ["**/house_rules.md"]}', encoding="utf-8")
         assert native("claude", shared) == "", "Claude may skip an import: claim nothing"
         (home / ".claude" / "settings.json").unlink()
+        if sys.platform != "win32":  # a --settings flag on a process above the hook, inline or as a file
+            me = [sys.executable, __file__, "claude"]
+            env = {**os.environ, "PYTHONPATH": "", "KNOWLEDGE_NATIVE_TOP": str(os.getpid())}
+            run = lambda *flag: subprocess.run(["sh", "-c", 'exec "$@"', "sh", *me] if not flag else
+                                               ["sh", "-c", '"$0" "$1" "$2"', *me, *flag], capture_output=True, text=True, env=env).stdout.strip()
+            assert run() != "", "no flag: claimed"
+            assert run("--settings", '{"claudeMdExcludes": ["x"]}') == ""
+            (home / "s.json").write_text('{"claudeMdExcludes": ["x"]}', encoding="utf-8")
+            assert run("--settings", str(home / "s.json")) == "" and run(f"--settings={home / 's.json'}") == ""
         (home / ".codex").mkdir()  # the watcher's generated file: CLAUDE.md with its imports in place, other wrapping
         (home / ".codex" / "AGENTS.md").write_text("<!-- Generated -->\n# Me\n\n# House rules\n1.   Search first.\r\n", encoding="utf-8")
         assert set(dict(x.split(":") for x in native("codex", shared).split(","))) == {"CLAUDE.md", "house_rules.md"}
@@ -113,6 +164,7 @@ def self_test():
         assert native("agy", shared) == "" and native("nobody", shared) == ""  # no file: nothing claimed
         (home / ".codex" / "AGENTS.md").write_text("# Me\n\n# House rules\n1. Search first.\n" + "x" * 30_000, encoding="utf-8")
         assert native("codex", shared) == "", "a file the agent may cut off claims nothing"
+    ancestors = real
     print("ok")
 
 
