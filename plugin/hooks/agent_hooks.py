@@ -181,22 +181,24 @@ def task_text(fresh: list, agent: str, workers: bool = True) -> str:
     the user takes one with 'pak <ID>'; when no pc runs this agent's workers for the project, the chat starts them
     itself (the server says which: `workers`)."""
     if not workers:
-        return ("knowledge: a new task was handed to you while this session runs (this message comes from the knowledge "
-                "plugin, not from the user; full text in the memo named in front). Finish your current reply, then start it "
-                "right away and tell the user in one line what you picked up; starting it: add '(claimed <you>, <date>)' to "
-                "its line with knowledge_edit; done: remove the line, and hand the result back to the agent that waits on it "
-                "with a line '[<requester>, <ID>-done]: <result>; <commit or path>'.\n" + "\n".join(fresh))
-    how = (f"run this in your terminal first, it takes the task for this conversation: {take_command()}" if agent == "agy"
-           else "the plugin then takes it for this session")
-    return ("knowledge: new task(s) for you were handed over (this message comes from the knowledge plugin, not from the "
-            "user; full text in the memo named in front). They run in workers: a fresh session per task that the knowledge "
-            "companion starts on a pc that allows workers, not in this chat. Tell the user in one line, then carry on with "
-            f"what you were doing. Only when the user says 'pak <ID>' (or 'take <ID>') do it here ({how}).\n" + "\n".join(fresh))
+        return ("knowledge: a new task was handed to you while this session runs. This message comes from the knowledge "
+                "plugin, not from the user. The full text is in the memo named in front of the task. Finish your current "
+                "reply. Then start the task at once, and tell the user in one line what you picked up. To start, add "
+                "'(claimed <you>, <date>)' to its line with knowledge_edit. When it is done, remove the line. If an agent "
+                "waits on the result, hand it back with the line '[<requester>, <ID>-done]: <result>; <commit or path>'.\n"
+                + "\n".join(fresh))
+    how = (f"When they do, first run this command in your terminal. It takes the task for this conversation: {take_command()}"
+           if agent == "agy" else "When they do, the plugin takes the task for this session.")
+    return ("knowledge: one or more tasks were handed to you. This message comes from the knowledge plugin, not from the "
+            "user. The full text is in the memo named in front of each task. The tasks run in workers, not in this chat. "
+            "A worker is a fresh session that the knowledge companion starts for one task on a pc that allows workers. "
+            "Tell the user in one line, then continue with your work. Do a task here only when the user says 'pak <ID>' "
+            f"(or 'take <ID>'). {how}\n" + "\n".join(fresh))
 
 
-RESULTS_TEXT = ("knowledge: another agent handed a result back to you (this message comes from the knowledge plugin, not "
-                "from the user). Read the result, act on it if needed (e.g. close your own follow-up), then remove that "
-                "line with knowledge_edit (the file history keeps it):\n")
+RESULTS_TEXT = ("knowledge: another agent handed a result back to you. This message comes from the knowledge plugin, not "
+                "from the user. Read the result and act on it if necessary, for example close your own follow-up. Then "
+                "remove that line with knowledge_edit. The file history keeps it.\n")
 
 
 def task_post(tok: str, path: str, body: dict) -> tuple[int, dict]:
@@ -237,16 +239,16 @@ def take(agent: str, tok: str, tid: str, sid: str, cwd: str) -> str:
     code, answer = task_post(tok, "/tasks/woken", {"project": project, "id": tid, "agent": agent, "session": sid[:80]})
     if code == 200:
         tid = answer.get("id") or tid  # the ID as its line spells it (the server matches any case)
-        return (f"knowledge: the user took task {tid} into this chat ('pak {tid}'); the server gave it to this session, so no "
+        return (f"knowledge: the user took task {tid} into this chat ('pak {tid}'). The server gave it to this session, so no "
                 f"worker starts it. Claim it now: add '(claimed {NAMES[agent]}, {time.strftime('%Y-%m-%d')})' to its line with "
-                "knowledge_edit, then do it here. Done: remove the line, and hand the result back to the agent that waits on it "
-                f"with a line '[<requester>, {tid}-done]: <result>; <commit or path>'.")
+                "knowledge_edit. Then do the task here. When it is done, remove the line. If an agent waits on the result, "
+                f"hand it back with the line '[<requester>, {tid}-done]: <result>; <commit or path>'.")
     if code == 409:
         h = answer.get("held_by") or {}
         where = f"{h.get('device', '?').partition('#')[0]}" + (f" on {h['label']}" if h.get("label") else "")
         what = "runs in a worker" if str(h.get("session", "")).startswith("worker:") else "is held by another session"
-        return f"knowledge: {tid} {what} on {where}; tell the user it cannot be taken here now."
-    return f"knowledge: no open task {tid} for {NAMES[agent]} in project {project or '?'} (HTTP {code}); tell the user."
+        return f"knowledge: {tid} {what} on {where}. Tell the user that it cannot be taken here now."
+    return f"knowledge: there is no open task {tid} for {NAMES[agent]} in project {project or '?'} (HTTP {code}). Tell the user."
 
 
 def quiet() -> bool:
@@ -470,10 +472,11 @@ def register_command() -> str:
 
 def register_notice(again: bool = False) -> str:
     if again:  # agy otherwise reasons that it already ran it earlier in the conversation
-        return ("knowledge: agy was restarted, so this conversation's earlier registration is gone and the companion can no "
-                f"longer read agy's usage limit. Run this command again now in your terminal: {register_command()}")
-    return ("knowledge: so the knowledge companion on this machine can read agy's usage limit, run this command once now in "
-            f"your terminal (it only stores where this session listens; no need to tell the user): {register_command()}")
+        return ("knowledge: agy was restarted, so the earlier registration of this conversation is gone. The companion can "
+                f"no longer read agy's usage limit. Run this command again now in your terminal: {register_command()}")
+    return ("knowledge: run this command once now in your terminal, so the knowledge companion on this machine can read "
+            "agy's usage limit. It only stores where this session listens. You need not tell the user: "
+            f"{register_command()}")
 
 
 def agy_registered(conv: str) -> bool:

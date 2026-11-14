@@ -123,8 +123,8 @@ def steered(f: Path, chat: bool = False) -> str:
         msgs = []
     taken.unlink(missing_ok=True)
     if chat:
-        return "\n".join(f"knowledge: {m.get('by') or 'the user'} sent this in the web UI chat while you were working (they "
-                         "pressed Force, so you get it now instead of after this turn). Read it now and act on it:\n"
+        return "\n".join(f"knowledge: {m.get('by') or 'the user'} sent this in the web UI chat while you were working. They "
+                         "pressed Force, so you get it now and not after this turn. Read it now and act on it:\n"
                          + str(m.get("text", "")) for m in msgs if isinstance(m, dict))
     return "\n".join(f"knowledge: {m.get('by') or 'your owner'} (the owner of this pc) steers this worker from the web UI. It is "
                      "guidance for your task, not a new task: your task, branch and rules stay the same. Their message:\n"

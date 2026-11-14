@@ -31,11 +31,11 @@ CLAUDE_FILE = STATE / "limits-claude.json"
 SAID = STATE / "limits-said.json"
 ORIGINAL = STATE / "statusline-original.json"  # the status line command the tap runs (and the way back)
 TAP = STATE / "limits.py"  # a copy: the plugin folder changes with every version, the status line command must not
-ADVICE = {50: "Just so you know; carry on.",
+ADVICE = {50: "Just so you know. Carry on.",
           75: "Work economically: no new subagents unless clearly needed, read only what you need.",
-          90: "Tell the user in one line, finish the current step and keep a short hand-over note ready in case the "
+          90: "Tell the user in one line. Finish the current step, and keep a short hand-over note ready in case the "
               "limit runs out.",
-          95: "New subagents are refused until it resets; tell the user in one line."}
+          95: "New subagents are refused until it resets. Tell the user in one line."}
 
 
 def live(windows: list, now: float) -> list:
@@ -204,7 +204,7 @@ def gate(agent: str, hook: dict, agy_status=None) -> str:
     got = used(agent, hook, agy_status)
     if not got or got[0] < GATE:
         return ""
-    reason = (f"knowledge: {got[0]:.0f}% of the {agent} usage limit is used ({got[1]} window{when(got[2])}); no new "
+    reason = (f"knowledge: {got[0]:.0f}% of the {agent} usage limit is used ({got[1]} window{when(got[2])}). No new "
               "subagents until it resets. Do the step yourself, or stop and tell the user.")
     if agent == "agy":
         return json.dumps({"decision": "deny", "reason": reason})

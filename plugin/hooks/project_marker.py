@@ -60,13 +60,13 @@ def notice(start: Path) -> str:
     if not wt:
         return ""
     if wt[1] is None:
-        return (f"knowledge: this session runs in a git worktree ({wt[0]}) whose main checkout was not found (moved, "
-                f"deleted or a bare repository), so it is not linked to a knowledge project and its docs are not "
-                f"mirrored. Tell the user before relying on work here.")
+        return (f"knowledge: this session runs in a git worktree ({wt[0]}), but its main checkout was not found. It was "
+                f"moved or deleted, or it is a bare repository. So this folder is not linked to a knowledge project, and "
+                f"its docs are not mirrored. Tell the user before you rely on work here.")
     return (f"knowledge: this session runs in a separate git worktree ({wt[0]}) of {wt[1]}. Other agents and the user "
-            f"work in the main checkout and do not see these changes until they are merged. Follow the project's rule on "
-            f"worktrees in its memory; before you finish, merge or hand the work off and say where it is. Docs are "
-            f"mirrored from the main checkout only.")
+            f"work in the main checkout. They do not see these changes until they are merged. Follow the project's rule "
+            f"on worktrees in its memory. Before you finish, merge the work or hand it off, and say where it is. Docs "
+            f"are mirrored from the main checkout only.")
 
 
 if __name__ == "__main__":

@@ -435,10 +435,10 @@ def stop_note(w: dict, target: str) -> Path:
     """Tell a running worker to hand over (its watch hook reads this after its next tool call)."""
     DIR.mkdir(parents=True, exist_ok=True)
     f = stop_path(w)
-    f.write_text(f"knowledge: the usage limit of this agent is at 90%. Stop now: commit what you have on {w.get('branch') or 'your folder'}, "
-                 f"replace the task line with the hand-over line for {target} (rule 4 of your task: "
-                 f"'[{target}, {base_id(w['id'])}-cont] ... done: ...; left: ...'), then end. You will be stopped in "
-                 f"{GRACE // 60} minutes.", encoding="utf-8")
+    f.write_text(f"knowledge: the usage limit of this agent is at 90%. Stop now. Commit what you have on "
+                 f"{w.get('branch') or 'your folder'}. Replace the task line with the hand-over line for {target}, as rule 4 "
+                 f"of your task says: '[{target}, {base_id(w['id'])}-cont] ... done: ...; left: ...'. Then end. You will be "
+                 f"stopped in {GRACE // 60} minutes.", encoding="utf-8")
     return f
 
 

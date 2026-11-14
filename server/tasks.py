@@ -12,7 +12,7 @@ TASK_START = re.compile(r"\s*(?:\([^)]*\)\s*)*from\s+([^,:]+?)\s*,\s*start\s+(no
                         r"|20\d\d-\d\d-\d\d|\d{1,2} [a-z]+ 20\d\d)\s*(?:\([^)]*\)\s*)*:", re.I)
 DONE_LINE = re.compile(r"^\s*-\s*\[([^,\]]+),\s*([^\]]+-done)\]:?\s*(.*)$", re.I)  # a result handed back, no date
 TASK_FORMAT = ("'- open until <date> [<Owner>, <ID>] from <Requester>, start <now | after <ID> | <date> | after approval>: "
-               "<what>' (<Owner>@<device> lets only that device start it)")
+               "<what>' (<Owner>@<device token> lets only the machines of that token start it)")
 HAND_BACK = ("When another agent handed it to you and waits on the result, hand it back with a line for that agent: "
              "'[<requester>, <ID>-done]: <result>; <commit or path>'. A new task for another agent: " + TASK_FORMAT + ".")
 WORKER_HANDBACK = re.compile(r"\b(?:branch|folder)\s+\S+.*\bdone:.*\bleft:", re.I | re.S)  # folder: a project without git

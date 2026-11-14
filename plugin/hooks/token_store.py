@@ -23,8 +23,8 @@ import time
 from pathlib import Path
 
 SERVICE = "knowledge"
-NO_URL = ("knowledge: no server address is set on this device, so the knowledge server is not used and no token was sent. "
-          "Tell the user to run the one-line installer, which asks for the address: "
+NO_URL = ("knowledge: no server address is set on this device. So the knowledge server is not used, and no token was "
+          "sent. Tell the user to run the one-line installer, which asks for the address: "
           "curl -fsSL https://raw.githubusercontent.com/To0wnn/knowledge/main/install.sh | sh (Linux, macOS), "
           "irm https://raw.githubusercontent.com/To0wnn/knowledge/main/install.ps1 | iex (Windows); or set KNOWLEDGE_URL.")
 NO_TOKEN = ("no token is stored on this device, so the server refused it. Run the one-line installer, which asks for it: "

@@ -2775,8 +2775,8 @@ def wake_e2e(tok: str, home: Path, project: Path):
         check("took task WAKE-CLAUDE1" in said and "(claimed Claude," in said and mine["WAKE-CLAUDE1"]["mine"] is False
               and next(t for t in leases() if t["id"] == "WAKE-CLAUDE1")["mine"] is True,
               "chat: 'pak <id>' in the user's words, typed in lowercase, takes that task for this Claude session", said[:500])
-        check("start it right away" in said and "run in workers" not in said,
-              "chat: with no pc running Claude workers for the project, a new task is said as 'start it right away' (as 0.14)", said[:600])
+        check("start the task at once" in said and "run in workers" not in said,
+              "chat: with no pc running Claude workers for the project, a new task is said as 'start the task at once' (as 0.14)", said[:600])
         code, out, err = hook(["tasks", "claude", "-"], {"session_id": "cl-2", "cwd": str(project), "prompt": "pak Wake-Claude1"})
         check("held by another session" in out, "chat: a second chat cannot take a task another session took", out[:400])
         code, out, err = hook(["take", "agy", "WAKE-GEMINI1"], {}, {"ANTIGRAVITY_CONVERSATION_ID": "conv-1"})
