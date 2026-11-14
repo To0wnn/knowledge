@@ -1046,6 +1046,32 @@ def expand_imports(text: str) -> str:
     return IMPORT.sub(one, text)
 
 
+def shared_digest(name: str) -> str:
+    """sha256 of a shared file as an agent's own instruction file holds it (plugin/hooks/native_rules.py: no
+    frontmatter, CLAUDE.md with its imports, whitespace collapsed), or "" when it cannot be read."""
+    try:
+        body = kb_lint.FRONT.sub("", (ROOTS["claude"] / name).read_text(encoding="utf-8"), count=1)
+    except OSError:
+        return ""
+    text = expand_imports(body) if name == "CLAUDE.md" else body
+    return hashlib.sha256(" ".join(text.split()).encode("utf-8")).hexdigest()
+
+
+NATIVE_NAMES = ("CLAUDE.md", RULES_FILE, DEV_RULES_FILE)
+
+
+def native_loaded(param: str) -> tuple:
+    """The shared files the session's agent already loaded itself (?native=name:sha256,...), checked against this
+    server's copies: a stale, edited or made-up claim leaves the part in, so an agent never misses a rule."""
+    claims = dict(x.split(":", 1) for x in param.split(",") if re.fullmatch(r"[\w.-]+\.md:[0-9a-f]{64}", x))
+    return tuple(n for n in NATIVE_NAMES if claims.get(n) and claims[n] == shared_digest(n))
+
+
+def native_note(names) -> str:
+    return (f"Not repeated here: {', '.join(names)}. This agent already loaded the same text from its own instruction file "
+            "(CLAUDE.md, AGENTS.md or GEMINI.md); those rules apply as written there.")
+
+
 # Tool annotations let clients decide on approval themselves (Codex "writes" mode asks only for non-read-only tools).
 READ = ToolAnnotations(read_only_hint=True, open_world_hint=False)
 EDIT = ToolAnnotations(read_only_hint=False, destructive_hint=False, open_world_hint=False)
@@ -2306,11 +2332,13 @@ def tool_calls(mem: str) -> str:
             f"decisions); knowledge_lesson(what, why, prevent). A path includes its root, e.g. '{mem}/MEMORY.md'.")
 
 
-def context_parts(project: str = "homelab", agent: str = "", chat: bool = False, webchat: bool = False) -> list[str]:
+def context_parts(project: str = "homelab", agent: str = "", chat: bool = False, webchat: bool = False,
+                  native: tuple = ()) -> list[str]:
     """Startup context for the plugin's SessionStart hooks: what a VM session in that project gets loaded natively,
     split on line boundaries into parts that each fit one hook output, so nothing is cut off. The tasks handed to
     `agent` come first, so they sit in part 1 instead of after the memory index. A chat turn from the web UI (webchat)
-    gets no task lists, only a note what it is."""
+    gets no task lists, only a note what it is. `native`: the shared files the agent already loaded (native_loaded),
+    left out with one line that says so."""
     docs, mem = PROJECTS[project]
     mine, rest = ([WEBCHAT_NOTE], []) if webchat else open_items_text(mem, agent, chat)
     if not in_scope("claude/"):  # a guest: only this project, no word about the owner's other projects or vault
@@ -2320,14 +2348,16 @@ def context_parts(project: str = "homelab", agent: str = "", chat: bool = False,
                 f"copies every .md to the server. Memory: {mem}/ with the index {mem}/MEMORY.md (below). Save and update "
                 f"memories there (knowledge_edit, or knowledge_write for a new file plus one index line), never in local "
                 "files. Search: knowledge_search, by meaning knowledge_semantic_search; housekeeping: knowledge_lint.",
-                tool_calls(mem), house_rules(mem), *[r for r in [dev_rules()] if r]]
+                tool_calls(mem), *([] if RULES_FILE in native else [house_rules(mem)]),
+                *[r for r in [dev_rules()] if r and DEV_RULES_FILE not in native],
+                *[native_note(n) for n in [[x for x in (RULES_FILE, DEV_RULES_FILE) if x in native]] if n]]
         with index.lock:
             empty = not any(r.startswith(mem + "/") and r != f"{mem}/MEMORY.md" for r in list(index.files))
         if empty:  # a new guest whose folder may already hold CLAUDE.md / AGENTS.md / GEMINI.md and notes
             text.append("First session in this project: its memory is still empty. If this folder or this agent already "
                         "holds instructions or notes (CLAUDE.md, AGENTS.md, GEMINI.md, other .md files, Claude Code's local "
                         "memory in ~/.claude/projects/), ask the user once whether to turn the lasting knowledge in them "
-                        f"into memos in {mem}/ by the house rules above. Leave those files where they are (the folder's .md "
+                        f"into memos in {mem}/ by the house rules. Leave those files where they are (the folder's .md "
                         "files are mirrored as docs), but give each doc in this folder a frontmatter topic: that matches "
                         "a MEMORY.md heading, so it sits on that topic in the graph; knowledge_lint lists the docs without one.")
         try:
@@ -2359,6 +2389,9 @@ def context_parts(project: str = "homelab", agent: str = "", chat: bool = False,
         except ToolError:  # outside this token's scope
             continue
         if full.exists():
+            if rel == "claude/CLAUDE.md" and "CLAUDE.md" in native:
+                text.append(native_note([rel]))
+                continue
             body = full.read_text(encoding="utf-8")
             text.append(context_section(rel, expand_imports(body) if rel == "claude/CLAUDE.md" else body))
     return split_parts("\n\n".join(mine + text + rest))
@@ -4839,18 +4872,18 @@ _context_locks: dict[tuple, threading.Lock] = {}
 _context_guard = threading.Lock()
 
 
-def shared_context_parts(project: str, agent: str, chat: bool, webchat: bool) -> list[str]:
+def shared_context_parts(project: str, agent: str, chat: bool, webchat: bool, native: tuple = ()) -> list[str]:
     """context_parts once per session start: the plugin asks for every part at the same moment, and building the whole
     context (lint, tasks) for each part made them queue for seconds, past the hook's 8 s limit (offline mode)."""
     # the token's scope decides what it may see; index.note_gen makes any memo or doc change rebuild it at once
-    key = (device.get().get("name", ""), project, agent, chat, webchat, index.note_gen)
+    key = (device.get().get("name", ""), project, agent, chat, webchat, native, index.note_gen)
     with _context_guard:
         lock = _context_locks.setdefault(key, threading.Lock())
     with lock:  # the parts that arrive meanwhile wait for this one build instead of each building their own
         now = time.time()
         if (hit := _context_cache.get(key)) and now - hit[0] < CONTEXT_TTL:
             return hit[1]
-        parts = context_parts(project, agent, chat, webchat)
+        parts = context_parts(project, agent, chat, webchat, native)
         with _context_guard:
             for k in [k for k, (at, _) in _context_cache.items() if now - at >= CONTEXT_TTL]:
                 del _context_cache[k]
@@ -4869,8 +4902,9 @@ async def context_route(request: Request):
     # worker itself knows its one task from its prompt
     chat = plugin_version(request.query_params.get("plugin", "")) >= (0, 15, 0) and not device.get().get("worker") \
         and agent in AGENT_OWNERS and bool(await asyncio.to_thread(worker_hosts, project, agent))
+    native = await asyncio.to_thread(native_loaded, request.query_params.get("native", "")[:1000])  # reads files: off the loop
     parts = await asyncio.to_thread(shared_context_parts, project, agent if agent in AGENT_OWNERS else "", chat,
-                                    bool(device.get().get("webchat")))  # lint + graph: off the loop
+                                    bool(device.get().get("webchat")), native)  # lint + graph: off the loop
     if v := request.query_params.get("plugin", ""):  # every part asks, so all of them split the same way
         if request.path_params["part"] == 1:
             q = request.query_params

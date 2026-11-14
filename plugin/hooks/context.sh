@@ -18,6 +18,9 @@ linked=$(sh "$(dirname "$0")/py.sh" "$(dirname "$0")/project_marker.py" "${CLAUD
 if [ -n "$linked" ]; then set -- --data-urlencode "project=$linked" --data-urlencode "linked=1"
 else set -- --data-urlencode "project=${CLAUDE_PROJECT_DIR:-$PWD}"; fi
 set -- "$@" --data-urlencode "agent=claude"  # the server puts this agent's own tasks first
+# The shared rule files Claude Code already loaded from ~/.claude/CLAUDE.md (hashes only): the server leaves them out.
+native=$(sh "$(dirname "$0")/py.sh" "$(dirname "$0")/native_rules.py" claude)
+[ -n "$native" ] && set -- "$@" --data-urlencode "native=$native"
 # The plugin version, so the admin page shows which devices stay behind and the session hears when auto-update failed.
 version=$(sed -n 's/.*"version": *"\([0-9.]*\)".*/\1/p' "$(dirname "$0")/../.claude-plugin/plugin.json" 2>/dev/null | head -1)
 [ -n "$version" ] && set -- "$@" --data-urlencode "plugin=$version"

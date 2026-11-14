@@ -449,6 +449,27 @@ def folder_link(home: Path):
     code, out, err = run([bash(), "-c", f'sh "{(hooks / "context.sh").as_posix()}" 1'], "", {**env, "CLAUDE_PROJECT_DIR": str(linked)})
     check("separate git worktree" not in out, "claude: no worktree notice in the main checkout", out[:300])
 
+    # The shared CLAUDE.md that an agent already loaded from its own instruction file is not sent again (native_rules.py
+    # sends only hashes); each agent finds its own file: ~/.claude/CLAUDE.md, $CODEX_HOME/AGENTS.md, ~/.gemini/GEMINI.md.
+    own = {"claude": home / ".claude" / "CLAUDE.md", "codex": home / ".codex" / "AGENTS.md", "agy": home / ".gemini" / "GEMINI.md"}
+    (home / ".claude" / "gedeeld").mkdir(parents=True, exist_ok=True)
+    (home / ".claude" / "gedeeld" / "CLAUDE.md").write_text("global rules\n", encoding="utf-8")  # the server's copy
+    for agent, f in own.items():
+        f.parent.mkdir(parents=True, exist_ok=True)
+        f.write_text("<!-- Generated -->\r\nglobal   rules\r\n", encoding="utf-8")  # other line ends and spacing: same words
+        if agent == "claude":
+            code, out, err = run([bash(), "-c", f'sh "{(hooks / "context.sh").as_posix()}" 1'], "", {**env, "CLAUDE_PROJECT_DIR": str(plain)})
+        else:
+            code, out, err = run([sys.executable, "-X", "utf8", str(hooks / "agent_hooks.py"), "context", agent], json.dumps({"cwd": str(plain)}), env)
+        check("Not repeated here: claude/CLAUDE.md" in out and "global rules" not in out,
+              f"{agent}: the shared CLAUDE.md it loaded itself is not repeated at session start", out[:400] + err[-300:])
+        f.write_text("my own rules\n", encoding="utf-8")  # without the shared text: the full context again
+        code, out, err = (run([bash(), "-c", f'sh "{(hooks / "context.sh").as_posix()}" 1'], "", {**env, "CLAUDE_PROJECT_DIR": str(plain)})
+                          if agent == "claude" else
+                          run([sys.executable, "-X", "utf8", str(hooks / "agent_hooks.py"), "context", agent], json.dumps({"cwd": str(plain)}), env))
+        check("global rules" in out and "Not repeated here" not in out, f"{agent}: a different own file gets the shared CLAUDE.md", out[:400])
+        f.unlink()
+
 
 def offline(tok: str, home: Path, project: Path, garden: Path, mirror: Path):
     memo = mirror / "garden-memory" / "project_offline.md"

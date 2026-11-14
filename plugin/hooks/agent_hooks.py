@@ -45,6 +45,7 @@ import project_marker  # noqa: E402  (the folder-to-project link, shared with th
 import self_update  # noqa: E402  (auto-update of this plugin, the counterpart of Claude Code's own)
 import limits  # noqa: E402  (the usage-limit ladder, shared with the Claude plugin)
 import hook_status  # noqa: E402  (failures of these hooks, reported to the server)
+import native_rules  # noqa: E402  (which shared rule files the agent already loaded itself)
 URL = token_store.url()
 KN_HOME = token_store.KN_HOME
 AGENTS = ("agy", "codex")
@@ -64,7 +65,9 @@ def context_text(tok: str, cwd: str, agent: str = "") -> str:
     version = ".".join(map(str, self_update.own()))  # the admin page shows who stays behind; the server says so here
     check = self_update.load().get(f"{agent}:check") or {}  # and why: the last own update check and its failure
     upd = {"upd_at": int(check.get("at", 0)), "upd_err": check.get("error", "")} if check else {}
+    native = native_rules.native(agent)  # shared rule files this agent already loaded itself (hashes only)
     query = urllib.parse.urlencode({**project_query(cwd), "agent": agent, **({"plugin": version} if version else {}), **upd,
+                                    **({"native": native} if native else {}),
                                     **({"url": "default"} if token_store.url_is_default() else {})})
     for n in range(1, 10):
         q = query

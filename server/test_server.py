@@ -4061,6 +4061,17 @@ def main():
         assert "cx-77" not in {c["session"] for c in row["clients"]}, row
         assert "Development rules" in ctx and "2. Done means proven." in ctx, ctx  # a guest gets the development rules too
         assert "# Development rules" in http("GET", "/house-rules", token=fr)[1]  # and so does an agent's rules file
+        # ...unless its agent already loaded the same files itself (plugin/hooks/native_rules.py sends their hashes)
+        sys.path.insert(0, str(Path(__file__).parents[1] / "plugin/hooks"))
+        import native_rules as nr
+        claim = lambda *names: urllib.parse.quote(",".join(f"{n}:{nr.digest(nr.shared_text(cla / n, cla))}" for n in names))
+        nat = "".join(http("GET", f"/context/{n}?project=x&agent=codex&native={claim('house_rules.md', 'dev_rules.md')}", token=fr)[1] for n in range(1, 5))
+        assert "Done means proven" not in nat and "Memory is a hint" not in nat and "[Gemini, VS-1]" in nat, nat[:800]
+        assert "Not repeated here: house_rules.md, dev_rules.md" in nat and "Tool arguments" in nat, nat[:800]
+        half = "".join(http("GET", f"/context/{n}?project=x&agent=codex&native={claim('dev_rules.md')}", token=fr)[1] for n in range(1, 5))
+        assert "Done means proven" not in half and "Memory is a hint" in half, half[:800]  # only what was claimed
+        fake = urllib.parse.quote("house_rules.md:" + "0" * 64 + ",dev_rules.md:nothex")
+        assert "Done means proven" in http("GET", f"/context/1?project=x&agent=codex&native={fake}", token=fr)[1]  # wrong hash: all of it
         assert b"<li>Done means proven.</li>" in raw("GET", "/ui/help", headers=ck)[2]  # and the help page
         assert "garden-memory/project_beds.md" in call("knowledge_list", {}, token=fr)[1]  # a guest's own memory by default
         # A redacting guest reads ‹secret› for a masked value; writing that back must not erase the original.
@@ -4978,6 +4989,16 @@ def main():
         assert len(parts) >= 2 and "Item 119" in parts[-1] and "global rules" in parts[0], len(parts)
         # CLAUDE.md's import line arrives expanded: a remote device has no ~/.claude/gedeeld/house_rules.md.
         assert "Memory is a hint, not the truth" in parts[0] and "@~/.claude/gedeeld" not in "".join(parts), parts[0][:800]
+        # The owner's agent that loaded the shared CLAUDE.md itself gets one line instead of the text again.
+        sys.path.insert(0, str(Path(__file__).parents[1] / "plugin/hooks"))
+        import native_rules as nr
+        whole = urllib.parse.quote(f"CLAUDE.md:{nr.digest(nr.shared_text(cla / 'CLAUDE.md', cla))}")
+        nat = "".join(http("GET", f"/context/{n}?native={whole}")[1] for n in range(1, 9))
+        assert "global rules" not in nat and "Not repeated here: claude/CLAUDE.md" in nat and "Item 119" in nat, nat[:800]
+        (cla / "CLAUDE.md").write_text("global rules, edited\n@~/.claude/gedeeld/house_rules.md\n")  # the claim is stale now
+        stale = http("GET", f"/context/1?native={whole}")[1]  # the full text (from the 10 s cache it may be the old one)
+        assert "global rules" in stale and "Not repeated here" not in stale, stale[:500]
+        (cla / "CLAUDE.md").write_text("global rules\n@~/.claude/gedeeld/house_rules.md\n")
         st, body = http("GET", "/context/1?project=/home/x/trade_bot")
         assert "project trade" in body and "trade bot rules" in body and "Bot plan" in body and "Item 1 " not in body, body[:500]
         assert "project anpitek" in http("GET", "/context/1?project=/home/x/anpitek/boekhouding")[1]
