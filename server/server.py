@@ -5095,7 +5095,7 @@ PREF_KEY_COMBO = re.compile(r"(Ctrl\+|Alt\+)(Shift\+)?(\+|[^\s+]{1,12})")  # wit
 async def ui_me_prefs(request: Request):
     """Any of {chat_default: {agent, id, effort} | null, chat_reader: {agent, id, effort} | null, chat_review: {agent, id, effort} | null,
     keys: {action: combo}, matrix_room, matrix_url, matrix_token (admins; the token is stored apart and never sent back), grid_open, grid_group, grid_per_part, send_key, start_page,
-    task_names ("Anthony, To0wnn": the names task lines give this person; Needs you then shows only their person lines)}, for this person on every device. keys: the shortcuts that change,
+    task_names ("Alex, alex42": the names task lines give this person; Needs you then shows only their person lines)}, for this person on every device. keys: the shortcuts that change,
     null = back to the default; checked for shape only: the page owns the actions. chat_default, chat_reader, chat_review: the models for
     new chats, reading/subagents, and review ("" id or effort = the agent's own); checked for shape only: a pc that does not run it falls
     back in the page. Keys left out stay as they are."""
@@ -5122,7 +5122,7 @@ async def ui_me_prefs(request: Request):
             raise ValueError("matrix_token is an access token without spaces, or empty")
         if "matrix_room" in b and not (b["matrix_room"] == "" or (isinstance(b["matrix_room"], str) and MATRIX_ROOM_ID.fullmatch(b["matrix_room"]))):
             raise ValueError("matrix_room is a room id like !abc:example.org, or empty")
-        if "task_names" in b:  # "Anthony, To0wnn": the names task lines give this person; only their own cards then
+        if "task_names" in b:  # "Alex, alex42": the names task lines give this person; only their own cards then
             if not isinstance(b["task_names"], str) or len(b["task_names"]) > 200:
                 raise ValueError("task_names is the names task lines give you, comma-separated")
             names = [n.strip().lower() for n in b["task_names"].split(",") if n.strip()]

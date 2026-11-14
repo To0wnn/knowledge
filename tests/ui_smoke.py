@@ -861,9 +861,9 @@ async def shell(browser, devices, secret: str) -> None:
         forget: [...document.querySelectorAll('#machines .mx-c button')].some(b => /Forget/.test(b.textContent) && !b.closest('.menu-list'))})""")
     acc = await pg.evaluate("""[[...document.querySelectorAll('#machines .mx-account')].map((x) => x.textContent),
         [...document.querySelectorAll('#machines .mx-account a.btn')].map((a) => a.href)]""")
-    order = await pg.evaluate("""(() => { const l = [{id: ''}, {id: 'a', kind: 'login'}, {id: 'b'}, {id: 'rick', email: 'r@x'}];
-      return [accountOrder(l, 'rick').map((x) => x.id), accountGone(l[0], 'rick'), accountGone(l[0], ''), accountGone({id: '', email: 'e'}, 'rick'), accountUsage({id: 'b', windows: [[61, '7d', 0]]})]; })()""")
-    check(order == [["rick", "a", "", "b"], True, False, False, ""],
+    order = await pg.evaluate("""(() => { const l = [{id: ''}, {id: 'a', kind: 'login'}, {id: 'b'}, {id: 'sam', email: 'r@x'}];
+      return [accountOrder(l, 'sam').map((x) => x.id), accountGone(l[0], 'sam'), accountGone(l[0], ''), accountGone({id: '', email: 'e'}, 'sam'), accountUsage({id: 'b', windows: [[61, '7d', 0]]})]; })()""")
+    check(order == [["sam", "a", "", "b"], True, False, False, ""],
           f"Accounts: main first, signed-out last and without old usage; a signed-out own one is hidden unless main {order}")
     if "https://claude.com/cai/oauth/authorize?code=true" in acc[1]:  # the seeded pc (ui_ci): own sign-in, a token account, one waiting for its code
         check(acc[0][0].startswith("own") and any("long-lived token" in a for a in acc[0]) and acc[1][0] == "https://claude.com/cai/oauth/authorize?code=true",
@@ -1534,30 +1534,30 @@ async def board(browser, devices, secret: str) -> None:
     cards = await pg.evaluate("""(() => { const keep = me.writable; me.writable = [...(me.writable || []), 'p'];
       const base = { col: 'needs', kind: 'task', project: 'p', path: 'p-memory/x.md', at: 0, sig: 's' };
       const ask = ckItem({ ...base, id: 'A-1', key: 'task:p/A-1', title: 'A-1 · short', line: 'waits for your approval', approve: true, owner: 'Codex',
-        from: 'Rick', author: 'rick.pc', text: 'the whole long line of A-1' });
-      const res = ckItem({ ...base, id: 'B-1-done', key: 'task:p/B-1-done', title: 'B-1-done · r', line: 'result for Anthony: r', result: true,
-        owner: 'Anthony', text: 'r', line_text: '- [Anthony, B-1-done]: r', can_send_back: true });
+        from: 'Sam', author: 'sam.pc', text: 'the whole long line of A-1' });
+      const res = ckItem({ ...base, id: 'B-1-done', key: 'task:p/B-1-done', title: 'B-1-done · r', line: 'result for Alex: r', result: true,
+        owner: 'Alex', text: 'r', line_text: '- [Alex, B-1-done]: r', can_send_back: true });
       const btns = (c) => [...c.querySelectorAll('.ck-item-acts > button')].map((b) => b.textContent);
       const menu = (c) => [...c.querySelectorAll('.menu-list button')].map((b) => b.textContent);
-      ck.detailOpen.add('task:p/A-1'); const open = ckItem({ ...base, id: 'A-1', key: 'task:p/A-1', title: 'A-1 · short', line: '', approve: true, owner: 'Codex', from: 'Rick', author: 'rick.pc', text: 'the whole long line of A-1' });
+      ck.detailOpen.add('task:p/A-1'); const open = ckItem({ ...base, id: 'A-1', key: 'task:p/A-1', title: 'A-1 · short', line: '', approve: true, owner: 'Codex', from: 'Sam', author: 'sam.pc', text: 'the whole long line of A-1' });
       ck.detailOpen.delete('task:p/A-1');
       const d = open.querySelector('.ck-detail')?.textContent || '';
       document.body.append(res); [...res.querySelectorAll('.ck-item-acts > button')].find((b) => b.textContent === 'Send back…').click();
       const form = res.querySelector('.ck-answer'), agents = form ? [...form.querySelectorAll('option')].map((o) => o.value).join(',') : ''; res.remove();
       me.writable = keep;
-      return [btns(ask), menu(ask), btns(res), menu(res), !ask.querySelector('.ck-detail'), d.includes('the whole long line') && d.includes('Written by rick.pc') && d.includes('Open in memo'), agents]; })()""")
+      return [btns(ask), menu(ask), btns(res), menu(res), !ask.querySelector('.ck-detail'), d.includes('the whole long line') && d.includes('Written by sam.pc') && d.includes('Open in memo'), agents]; })()""")
     check(cards == [["Approve", "Send back…"], ["Decline…", "Later: in 1 hour", "Later: tomorrow 08:00", "Hide until it changes"],
                     ["Done", "Send back…"], ["Later: in 1 hour", "Later: tomorrow 08:00", "Hide until it changes"], True, True, "claude,codex,agy"],
           f"Needs you: a task card answers Approve / Send back (Decline and Later in ⋯), a result Done / Send back with an agent to pick; a click unfolds the whole line and its writer {cards}")
     switch = await pg.evaluate("""(() => { const keep = ck.scope, chats = ck.chats, read = (b) => [...b.querySelectorAll('button')].map((x) => [x.textContent, x.getAttribute('aria-pressed')]);
       ck.chats = [{ machine: 'x', id: 'theirs', by: 'someone-else' }, { machine: 'x', id: 'mine', by: me.user }];
-      ck.scope = { scope: 'mine', names: ['anthony'], others: 2 }; const a = read(ckScopeSwitch());
+      ck.scope = { scope: 'mine', names: ['alex'], others: 2 }; const a = read(ckScopeSwitch());
       ck.chats = []; ck.scope = { scope: 'mine', names: [], others: 0 }; const b = read(ckScopeSwitch()); ck.chats = chats;
       const t = ckItem({ col: 'needs', kind: 'task', project: 'p', path: 'p-memory/x.md', at: 0, sig: 's', id: 'T-1', key: 'task:p/T-1', title: 'T-1', line: '', approve: true,
-        owner: 'Codex', from: 'Rick', author: 'rick.pc', writer: 'rick.pc', pin_to: 'rick.pc', text: 'x' });
-      ck.scope = keep; return [a, b, [...t.querySelectorAll('.menu-list button')].some((x) => x.textContent.startsWith('Always trust rick.pc in')),
+        owner: 'Codex', from: 'Sam', author: 'sam.pc', writer: 'sam.pc', pin_to: 'sam.pc', text: 'x' });
+      ck.scope = keep; return [a, b, [...t.querySelectorAll('.menu-list button')].some((x) => x.textContent.startsWith('Always trust sam.pc in')),
         [...t.querySelectorAll('.ck-item-acts > button')].map((x) => x.textContent).join('|')]; })()""")
-    check(switch == [[["Only mine", "true"], ["Everyone (+3)", "false"]], [["Only mine", "false"], ["Everyone", "true"]], True, "Approve|Approve on rick.pc only|Send back…"],
+    check(switch == [[["Only mine", "true"], ["Everyone (+3)", "false"]], [["Only mine", "false"], ["Everyone", "true"]], True, "Approve|Approve on sam.pc only|Send back…"],
           f"Needs you: the Only mine / Everyone switch says what it hides (2 task lines + 1 chat of someone else), and without names it shows everyone; an untrusted writer can be trusted from the card {switch}")
     await pg.click("#ck-view")
     await pg.wait_for_function("location.hash === '#/chats?view=list' && $('bd').hidden && !!$('ck-side').offsetParent", timeout=5000)

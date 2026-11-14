@@ -593,7 +593,7 @@ function ckScopeSwitch() {
   };
   pick("Only mine", mine, s.names.length ? `Only your own chats, and the task lines and results for ${s.names.join(", ")} (Settings: My names in task lines)` : "Only your own chats, task lines and results: asks once for the names task lines give you", () => {
     if (s.names.length) return save({ needs_scope: "mine" });
-    const names = (prompt("The names task lines give you, comma-separated (e.g. Anthony, To0wnn):", "") || "").trim();
+    const names = (prompt("The names task lines give you, comma-separated (e.g. Alex, alex42):", "") || "").trim();
     if (names) save({ task_names: names, needs_scope: "mine" });
   });
   const others = s.others + ck.chats.filter((c) => !c.closed && ckTheirs(c)).length;
