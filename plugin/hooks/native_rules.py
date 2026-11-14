@@ -66,6 +66,9 @@ def claude_excludes() -> bool:
     return any("claudeMdExcludes" in read(f) for f in files) or claude_flags()
 
 
+AGENT_BINARIES = {"claude", "claude.exe", "codex", "codex.exe", "codex.js", "agy", "agy.exe"}
+
+
 def ancestors(limit: int = 8) -> list:
     """The command lines of the processes above this hook (Claude Code itself is one of them): /proc on Linux, ps on
     macOS. Windows: none (no cheap way to read another process's arguments); shortcut: a --settings flag with
@@ -87,8 +90,8 @@ def ancestors(limit: int = 8) -> list:
         except (OSError, ValueError, IndexError, subprocess.SubprocessError):
             break
         out.append(args)
-        if args and Path(args[0]).name.lower() in ("claude", "claude.exe"):
-            break  # Claude Code itself: only its flags count, not those of whatever started it
+        if {Path(a).name.lower() for a in args[:2]} & AGENT_BINARIES:
+            break  # the agent itself (node runs Codex as its second argument): only its flags count, not its parents'
         pid = ppid
     return out
 
