@@ -1677,10 +1677,13 @@ def share_contract(tmp, ck, fr, raw, er, et):
     http("POST", "/machine/chats/events", {"chat": made["id"], "events": [], "done": True}, token=fr, headers=pc)
     gone = {**crep, "agents": {**crep["agents"], "claude": {"accounts": [a for a in accs if a["id"] != "erin"] + [{"id": "erin", "kind": "apikey", "by": "mallory"}]}}}
     http("POST", "/machine/report", gone, token=fr, headers=pc)
-    assert ui("/ui/api/chat/send", {"machine": mid, "id": made["id"], "text": "again"}, er)[0] == 200 and turn_acc() == [("", None)], \
-        "an account of that name added by someone else since: the turn runs on the pc's own sign-in, never on theirs"
+    assert ui("/ui/api/chat/send", {"machine": mid, "id": made["id"], "text": "again"}, er)[0] == 200 and turn_acc() == [("home", None)], \
+        "an account of that name added by someone else since: never on theirs, but on the pc's own, i.e. the owner's main"
     http("POST", "/machine/chats/events", {"chat": made["id"], "events": [], "done": True}, token=fr, headers=pc)
     http("POST", "/machine/report", crep, token=fr, headers=pc)
+    assert ui("/ui/api/chat/send", {"machine": mid, "id": made["id"], "text": "own", "account": ""}, er)[0] == 200 and turn_acc() == [("home", None)], \
+        "a guest's 'own' runs on what the pc's owner made main (the pc's own sign-in may be signed out)"
+    http("POST", "/machine/chats/events", {"chat": made["id"], "events": [], "done": True}, token=fr, headers=pc)
     assert main("") == 200 and rows(ck)[mid]["claudeMain"] == ""
     # agy accounts: the same rules per person with actions of their own, a main of their own, Google's sign-in link only
     aaccs = [{"id": "", "kind": "login"}, {"id": "home", "kind": "login", "by": "alice", "email": "a@example.org"},

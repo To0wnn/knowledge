@@ -6811,13 +6811,21 @@ def claude_accounts_for(m: dict, user: str, own_pc: bool, agent: str = "claude")
 def chat_account(mid: str, c: dict, who: str) -> str:
     """The Claude account a chat's turn runs on: the chat's choice only when it is still an account of the person whose
     message it is (an account removed and added again by someone else, or a person who joined the chat, runs on the
-    pc's own sign-in instead)."""
-    acc = c.get("account", "") if c.get("agent") in ACCOUNT_AGENTS else ""
-    if not acc or not who:
+    pc's own sign-in instead). For anyone but the pc's owner "the pc's own sign-in" is what its owner made main there,
+    the account its workers run on: an owner who signed in as an extra account and made that main may have signed the
+    pc's own out, which left a guest's chats on nothing."""
+    if c.get("agent") not in ACCOUNT_AGENTS or not who:
         return ""
+    acc = c.get("account", "")
     m, tokens = read_json(MACHINES_FILE, {}).get(mid) or {}, read_json(TOKENS_FILE, {})
-    own_pc = any(n in tokens and own_token(tokens[n], {"user": who, "admin": who in ADMINS}, steer=False) for n in m.get("tokens", {}))
-    return acc if any(a["id"] == acc and a["mine"] for a in claude_accounts_for(m, who, own_pc, c["agent"])) else ""
+    owns = lambda u: any(n in tokens and own_token(tokens[n], {"user": u, "admin": u in ADMINS}, steer=False) for n in m.get("tokens", {}))
+    own_pc = owns(who)
+    if acc and any(a["id"] == acc and a["mine"] for a in claude_accounts_for(m, who, own_pc, c["agent"])):
+        return acc
+    if own_pc:
+        return ""
+    return next((got for u in sorted(read_json(MAIN_FILES[c["agent"]], {}).get(mid) or {}) if owns(u)
+                 and (got := claude_main_of(mid, u, claude_accounts_for(m, u, True, c["agent"]), c["agent"]))), "")
 
 
 def claude_main_of(mid: str, user: str, accs: list, agent: str = "claude") -> str:
