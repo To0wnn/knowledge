@@ -61,7 +61,8 @@ def token(name: str) -> str:
 def context_text(tok: str, cwd: str, agent: str = "") -> str:
     """Every part of the startup context (/context/<n>, empty past the last), or one short notice; with the server
     down, the context of the last online session and the offline copy of the memory."""
-    key, out = hashlib.sha256(cwd.encode()).hexdigest()[:12], []
+    # per agent too: a context that left out what this agent's own file holds must not be served offline to the other one
+    key, out = hashlib.sha256(f"{cwd}\0{agent}".encode()).hexdigest()[:12], []
     version = ".".join(map(str, self_update.own()))  # the admin page shows who stays behind; the server says so here
     check = self_update.load().get(f"{agent}:check") or {}  # and why: the last own update check and its failure
     upd = {"upd_at": int(check.get("at", 0)), "upd_err": check.get("error", "")} if check else {}

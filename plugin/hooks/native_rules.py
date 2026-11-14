@@ -39,6 +39,11 @@ def expand(text: str, shared: Path) -> str:
     return IMPORT.sub(lambda m: FRONT.sub("", read(shared / m.group(1)), count=1) or m.group(0), text)
 
 
+# Codex and agy cut a long instruction file (agy: 24 KB after includes, Codex: project_doc_max_bytes 32 KiB): past this
+# the tail may never reach the model, so nothing is claimed and the start context brings the rules itself.
+MAX_BYTES = {"codex": 28_000, "agy": 20_000}  # with some margin below those caps
+
+
 def own_file(agent: str):
     home = Path.home()
     return {"claude": Path(os.environ.get("CLAUDE_CONFIG_DIR") or home / ".claude") / "CLAUDE.md",
@@ -55,7 +60,10 @@ def shared_text(path: Path, shared: Path) -> str:
 def native(agent: str, shared: Path = None) -> str:
     shared = shared or Path.home() / ".claude" / "gedeeld"
     path = own_file(agent)
-    own = flat(expand(read(path), shared)) if path else ""
+    raw = read(path) if path else ""
+    if agent in MAX_BYTES and len(raw.encode("utf-8")) > MAX_BYTES[agent]:
+        return ""
+    own = flat(expand(raw, shared))
     if not own:
         return ""
     found = []
@@ -86,6 +94,8 @@ def self_test():
         (home / ".codex" / "AGENTS.md").write_text("# Me\n\n# House rules\n1. Search first, edited.\n", encoding="utf-8")
         assert native("codex", shared) == "", "an edited copy is not the shared text"
         assert native("agy", shared) == "" and native("nobody", shared) == ""  # no file: nothing claimed
+        (home / ".codex" / "AGENTS.md").write_text("# Me\n\n# House rules\n1. Search first.\n" + "x" * 30_000, encoding="utf-8")
+        assert native("codex", shared) == "", "a file the agent may cut off claims nothing"
     print("ok")
 
 

@@ -1051,7 +1051,7 @@ def shared_digest(name: str) -> str:
     frontmatter, CLAUDE.md with its imports, whitespace collapsed), or "" when it cannot be read."""
     try:
         body = kb_lint.FRONT.sub("", (ROOTS["claude"] / name).read_text(encoding="utf-8"), count=1)
-    except OSError:
+    except (OSError, UnicodeDecodeError):  # unreadable: no claim holds, the context brings the text (or says it is missing)
         return ""
     text = expand_imports(body) if name == "CLAUDE.md" else body
     return hashlib.sha256(" ".join(text.split()).encode("utf-8")).hexdigest()
