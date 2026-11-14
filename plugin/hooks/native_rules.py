@@ -51,6 +51,20 @@ def own_file(agent: str):
             "agy": home / ".gemini" / "GEMINI.md"}.get(agent)
 
 
+def claude_excludes() -> bool:
+    """True when a settings file Claude Code reads names claudeMdExcludes: then it may skip an imported rule file that
+    still stands in CLAUDE.md (tested 14 Nov 2026: house_rules.md was gone), so Claude claims nothing. A --settings flag
+    on the command line is out of a hook's sight."""
+    cfg = Path(os.environ.get("CLAUDE_CONFIG_DIR") or Path.home() / ".claude")
+    project = Path(os.environ.get("CLAUDE_PROJECT_DIR") or os.getcwd())
+    files = [cfg / "settings.json", cfg / "settings.local.json", project / ".claude" / "settings.json",
+             project / ".claude" / "settings.local.json", Path("/etc/claude-code/managed-settings.json"),
+             Path("/Library/Application Support/ClaudeCode/managed-settings.json"),
+             Path(os.environ.get("ProgramData") or "C:/ProgramData") / "ClaudeCode" / "managed-settings.json",
+             Path(os.environ.get("ProgramFiles") or "C:/Program Files") / "ClaudeCode" / "managed-settings.json"]
+    return any("claudeMdExcludes" in read(f) for f in files)
+
+
 def shared_text(path: Path, shared: Path) -> str:
     """The text a shared file adds to an instruction file: without frontmatter, CLAUDE.md with its imports."""
     body = FRONT.sub("", read(path), count=1)
@@ -61,7 +75,7 @@ def native(agent: str, shared: Path = None) -> str:
     shared = shared or Path.home() / ".claude" / "gedeeld"
     path = own_file(agent)
     raw = read(path) if path else ""
-    if agent in MAX_BYTES and len(raw.encode("utf-8")) > MAX_BYTES[agent]:
+    if agent in MAX_BYTES and len(raw.encode("utf-8")) > MAX_BYTES[agent] or agent == "claude" and claude_excludes():
         return ""
     own = flat(expand(raw, shared))
     if not own:
@@ -88,6 +102,9 @@ def self_test():
         (home / ".claude" / "CLAUDE.md").write_text("Local line.\n@~/.claude/gedeeld/house_rules.md\n", encoding="utf-8")
         got = dict(x.split(":") for x in native("claude", shared).split(","))
         assert set(got) == {"house_rules.md"} and got["house_rules.md"] == digest("# House rules\n1. Search first.\n"), got
+        (home / ".claude" / "settings.json").write_text('{"claudeMdExcludes": ["**/house_rules.md"]}', encoding="utf-8")
+        assert native("claude", shared) == "", "Claude may skip an import: claim nothing"
+        (home / ".claude" / "settings.json").unlink()
         (home / ".codex").mkdir()  # the watcher's generated file: CLAUDE.md with its imports in place, other wrapping
         (home / ".codex" / "AGENTS.md").write_text("<!-- Generated -->\n# Me\n\n# House rules\n1.   Search first.\r\n", encoding="utf-8")
         assert set(dict(x.split(":") for x in native("codex", shared).split(","))) == {"CLAUDE.md", "house_rules.md"}
