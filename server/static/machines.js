@@ -205,7 +205,7 @@ function meters(pcs, a) {
       for (const acc of m.agents?.claude?.accounts || []) {
         if (acc.mine === false || !accountSignedIn(acc)) continue; // signed out: its usage is from before
         const id = acc.id || "";
-        if (!accMap.has(id)) accMap.set(id, { id, by: {}, isMain: false, email: "", plan: "", kind: acc.kind, budget: acc.budget, spent: acc.spent });
+        if (!accMap.has(id)) accMap.set(id, { id, name: acc.name, by: {}, isMain: false, email: "", plan: "", kind: acc.kind, budget: acc.budget, spent: acc.spent });
         const rec = accMap.get(id);
         if ((m.claudeMain || "") === id || acc.main) rec.isMain = true;
         if (acc.email && !rec.email) rec.email = acc.email;
@@ -218,7 +218,7 @@ function meters(pcs, a) {
     if (accMap.size > 1 || [...accMap.values()].some((x) => x.kind === "apikey")) {
       for (const [id, acc] of [...accMap].sort((x, y) => y[1].isMain - x[1].isMain)) {
         const grp = el("div", "mx-meter-group"), head = el("div", "mx-meter-group-head");
-        head.append(el("b", null, id || "own"));
+        head.append(el("b", null, accountName(acc)));
         if (acc.isMain) {
           const pill = el("span", "pill", "main");
           pill.title = "Default account for workers and new chats on this pc";
@@ -587,11 +587,11 @@ function accountsCell(m, agent = "claude") {
     const kindLabel = x.kind === "token" ? (x.preview ? `long-lived token (${x.preview})` : "long-lived token")
       : x.kind === "apikey" ? (x.preview ? `API key (${x.preview})` : "API key")
       : x.kind === "login" ? "browser sign-in" : "";
-    const who = x.pc ? "this pc's own sign-in"
+    const who = x.pc ? (x.kind ? "this pc's own sign-in (its owner's)" : "not signed in")
       : !x.id && x.kind ? `${kindLabel} for chats and workers${x.email ? ` (terminal: ${x.email})` : ""}`
       : x.email ? `${x.email}${kindLabel && x.kind !== "login" ? ` (${kindLabel})` : ""}`
       : kindLabel || "not signed in";
-    line.append(el("b", null, x.id || "own"), " ", val(who, x.pc || x.email || x.kind ? "" : "mx-diff"));
+    line.append(el("b", null, accountName(x)), " ", val(who, x.email || x.kind ? "" : "mx-diff"));
     if (x.plan) line.append(" ", val(x.plan, "muted"));
     if (mine && x.id === main) { const p = el("span", "pill", "main"); p.title = "Default account for workers and new chats on this pc"; line.append(p); }
     if (!mine) line.append(" ", val(`added by ${x.by || "?"}`, "muted"));
@@ -699,7 +699,7 @@ function extraAccountsCell(m, agent) {
   for (const x of accountOrder(ag.accounts, main)) {
     const line = el("div", "mx-account"), mine = x.mine !== false;
     const who = !x.id ? `this pc's own sign-in${x.email ? ` (${x.email})` : ""}` : x.kind === "apikey" ? `${cfg.key}${x.preview ? ` (${x.preview})` : ""}` : x.email || (x.kind ? "signed in" : "not signed in");
-    line.append(el("b", null, x.id || "own"), " ", val(who, !x.id || x.kind ? "" : "mx-diff"));
+    line.append(el("b", null, accountName(x)), " ", val(who, !x.id || x.kind ? "" : "mx-diff"));
     if (x.plan) line.append(" ", val(x.plan, "muted"));
     if (mine && x.id === main) { const p = el("span", "pill", "main"); p.title = `Default account for workers and your new ${name} chats on this pc`; line.append(p); }
     if (!mine) line.append(" ", val(`added by ${x.by || "?"}`, "muted"));

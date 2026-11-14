@@ -3325,7 +3325,7 @@ def shared_row(mid: str, m: dict, shared: dict, now: float) -> dict:
     sessions, errors, other workers or other folders."""
     comp, use = m.get("companion") or {}, {p for p, x in shared.items() if x in USES}
     user = device.get().get("user", "")
-    accs = {ag: claude_accounts_for(m, user, False, ag) if ag in (comp.get("agents") or {}) and use else [] for ag in ACCOUNT_AGENTS}
+    accs = {ag: claude_accounts_for(m, user, False, ag, mid) if ag in (comp.get("agents") or {}) and use else [] for ag in ACCOUNT_AGENTS}
     linked = [f for f in (comp.get("folders") or {}).get("linked", []) if f.get("project") in use]
     agents = sorted(comp.get("agents") or {}) if use else []
     return {"id": mid, "label": m.get("label", mid), "at": m.get("at", 0), "online": now - m.get("at", 0) < ONLINE, "tokens": [],
@@ -3391,7 +3391,7 @@ def machine_rows() -> list[dict]:
             rows[-1]["companion"].pop("asks", None)
         for ag in ACCOUNT_AGENTS:  # who is signed in there and a sign-in link: each person sees only their own
             if ag in agents:
-                agents[ag]["accounts"] = accs = claude_accounts_for(m, dev.get("user", ""), rows[-1]["own"], ag)
+                agents[ag]["accounts"] = accs = claude_accounts_for(m, dev.get("user", ""), rows[-1]["own"], ag, mid)
                 rows[-1][f"{ag}Main"] = claude_main_of(mid, dev.get("user", ""), accs, ag)
         if rows[-1]["mine"]:  # whom its owner shared it with, per project (Machines: Share)
             rows[-1]["shares"] = (all_shares.get(mid) or {}).get("projects", {})
@@ -6796,16 +6796,33 @@ CLAUDE_MAIN_FILE = ADMIN_DIR / "claude_main.json"  # {machine: {person: account}
 MAIN_FILES = {"claude": CLAUDE_MAIN_FILE, "codex": ADMIN_DIR / "codex_main.json", "agy": ADMIN_DIR / "agy_main.json"}  # the same per agent
 
 
-def claude_accounts_for(m: dict, user: str, own_pc: bool, agent: str = "claude") -> list:
+def claude_accounts_for(m: dict, user: str, own_pc: bool, agent: str = "claude", mid: str = "") -> list:
     """The accounts of an agent (Claude, agy) of pc record m as this person may see them: the pc's owner all (who
-    added each, "mine" on their own); anyone else the pc's own sign-in without who it is, plus the accounts they added
-    themselves."""
+    added each, "mine" on their own); anyone else the pc's own sign-in, plus the accounts they added themselves. Their
+    "own" is the account it really runs on (owner_main): its name (the owner's main, else the owner's name), whether
+    it is signed in and what is left of it, never its email or token."""
     accs = ((m.get("companion") or {}).get("agents") or {}).get(agent, {}).get("accounts") or []
     mine = lambda a: a["id"] == "" or a.get("by") == user or (own_pc and not a.get("by"))
     if own_pc:
         return [{**a, "mine": mine(a)} for a in accs]
-    return [{"id": "", "email": "", "plan": "", "kind": "", "preview": "", "at": 0, "expires": 0, "error": "", "windows": [], "by": "", "main": False, "mine": True, "pc": True}
-            if a["id"] == "" else {**a, "mine": True} for a in accs if mine(a)]
+    owner, main = owner_main(mid, m, agent) if mid else ("", "")
+    real = next((a for a in accs if a["id"] == main), {})
+    kind = real.get("kind") or ("login" if real.get("email") else "")  # an older companion names the pc's own only by its email
+    pc = {"id": "", "email": "", "plan": real.get("plan", ""), "kind": kind, "preview": "", "at": 0, "expires": 0,
+          "error": "", "windows": real.get("windows", []) if kind else [], "by": "", "main": False, "mine": True, "pc": True,
+          "name": main or owner}
+    return [pc if a["id"] == "" else {**a, "mine": True} for a in accs if mine(a)]
+
+
+def owner_main(mid: str, m: dict, agent: str) -> tuple:
+    """(the pc's owner, the account they made main there for an agent; "" = the pc's own sign-in): what "own" runs on
+    for anyone else, the same account the pc's workers use."""
+    tokens = read_json(TOKENS_FILE, {})
+    owns = lambda u: any(n in tokens and own_token(tokens[n], {"user": u, "admin": u in ADMINS}, steer=False) for n in m.get("tokens", {}))
+    for u in sorted(read_json(MAIN_FILES[agent], {}).get(mid) or {}):
+        if owns(u) and (got := claude_main_of(mid, u, claude_accounts_for(m, u, True, agent), agent)):
+            return u, got
+    return (read_json(SHARES_FILE, {}).get(mid) or {}).get("by") or next((o for n in m.get("tokens", {}) if (o := (tokens.get(n) or {}).get("owner"))), ""), ""
 
 
 def chat_account(mid: str, c: dict, who: str) -> str:
@@ -6822,10 +6839,7 @@ def chat_account(mid: str, c: dict, who: str) -> str:
     own_pc = owns(who)
     if acc and any(a["id"] == acc and a["mine"] for a in claude_accounts_for(m, who, own_pc, c["agent"])):
         return acc
-    if own_pc:
-        return ""
-    return next((got for u in sorted(read_json(MAIN_FILES[c["agent"]], {}).get(mid) or {}) if owns(u)
-                 and (got := claude_main_of(mid, u, claude_accounts_for(m, u, True, c["agent"]), c["agent"]))), "")
+    return "" if own_pc else owner_main(mid, m, c["agent"])[1]
 
 
 def claude_main_of(mid: str, user: str, accs: list, agent: str = "claude") -> str:

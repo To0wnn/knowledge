@@ -1628,7 +1628,8 @@ def share_contract(tmp, ck, fr, raw, er, et):
     act = lambda action, args, h=ck: ui("/ui/api/machines/action", {"machine": mid, "action": action, "args": args}, h)[0]
     theirs = rows(er)[mid]["agents"]["claude"]["accounts"]
     assert [(a["id"], a["email"], a["mine"]) for a in theirs] == [("", "", True), ("erin", "", True)] and theirs[1]["spent"] == 1.5, theirs
-    assert not theirs[0]["windows"], "the owner's usage stays the owner's"
+    assert theirs[0]["name"] == "alice" and theirs[0]["kind"] == "login" and theirs[0]["windows"] == [[30, "5h", 2e9]] and not theirs[0]["email"], \
+        "a guest's 'own' is named after the account it runs on, with what is left of it, never its email"
     owner = {a["id"]: a["mine"] for a in rows(ck)[mid]["agents"]["claude"]["accounts"]}
     assert owner == {"": True, "home": True, "erin": False, "old": True}, owner  # one added before owners were kept: the pc owner's
     tok = "sk-ant-oat01-" + "e" * 40
@@ -1668,6 +1669,8 @@ def share_contract(tmp, ck, fr, raw, er, et):
     assert main("home", er) == 400 and main("erin", er) == 200 and rows(er)[mid]["claudeMain"] == "erin"
     assert main("erin") == 400 and main("home") == 200 and rows(ck)[mid]["claudeMain"] == "home" and rows(er)[mid]["claudeMain"] == "erin"
     assert json.loads(http("POST", "/machine/report", crep, token=fr, headers=pc)[1])["claude_main"] == "home", "the owner's main goes to the pc for its workers"
+    pc_own = rows(er)[mid]["agents"]["claude"]["accounts"][0]
+    assert (pc_own["name"], pc_own["kind"], pc_own["pc"]) == ("home", "token", True), pc_own  # the owner's main, as the guest's 'own'
     made = json.loads(ui("/ui/api/chats", {"machine": mid, "agent": "claude", "folder": "/home/x/garden"}, er)[2])["chat"]
     assert made["account"] == "erin", made  # a new chat starts on that person's main account
     assert ui("/ui/api/chat/send", {"machine": mid, "id": made["id"], "text": "hi", "account": "home"}, er)[0] == 400, "never another person's account"

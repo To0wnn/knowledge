@@ -1362,13 +1362,14 @@ function ckPicker(card) {
     row.append(el("span", "ck-mfam", "Account"), seg);
     const own = ckAllAccounts(card).find((a) => a.id === "") || { id: "" }, main = ckAccPc(card)?.[`${card.pick.agent}Main`] || "";
     for (const a of accountOrder([own, ...accounts], main).filter((a) => !accountGone(a, main) || (card.pick.account || "") === a.id && card.pick.accountSet)) {
-      const b = el("button", "ck-mopt ck-acc", `${a.id || "own"}${a.id === main ? " (main)" : ""}`), left = a.pc ? "" : accountLeft(a); b.type = "button";
+      const b = el("button", "ck-mopt ck-acc", `${accountName(a)}${a.id === main ? " (main)" : ""}`), left = a.pc && !accountSignedIn(a) ? "not signed in" : accountLeft(a); b.type = "button";
+      if (a.pc && !accountSignedIn(a)) b.disabled = true; // nothing to run on: its owner signed nothing in there
       if (left) b.append(el("small", null, left)); // what is left of it, at a glance
       const kindLabel = a.kind === "token" ? (a.preview ? `long-lived token (${a.preview})` : "long-lived token")
         : a.kind === "apikey" ? (a.preview ? `API key (${a.preview})` : "API key")
         : a.kind === "login" ? "browser sign-in" : "";
-      const desc = a.pc ? `The pc's own ${AGENT_NAME[card.pick.agent] || card.pick.agent} sign-in (its owner's)`
-        : [a.id || "own", a.email, kindLabel, a.plan].filter(Boolean).join(" · ") || "not signed in";
+      const desc = a.pc ? `${accountName(a)}: the ${AGENT_NAME[card.pick.agent] || card.pick.agent} account this pc's owner runs it on${accountSignedIn(a) ? "" : " (not signed in)"}`
+        : [accountName(a), a.email, kindLabel, a.plan].filter(Boolean).join(" · ") || "not signed in";
       const timing = a.pc ? "" : accountTiming(a);
       b.title = [desc, timing].filter(Boolean).join(" — ");
       b.setAttribute("aria-pressed", String((card.pick.account || "") === a.id));
@@ -1544,8 +1545,8 @@ function ckPaint(card) {
   card.tok.hidden = !m.used && !m.ctx && !before.length; // the conversation's tokens: its context now and all it used
   // the Claude or agy account it runs on and what is left of it (yours only: another person's account is never named here)
   const accs = ACC_AGENTS.includes(m.agent) ? ckPc(m.machine)?.agents?.[m.agent]?.accounts || [] : [];
-  const acc = accs.find((a) => a.id === (m.account || "") && a.mine !== false && !a.pc);
-  const accText = acc && (acc.id || accs.length > 1) ? `${acc.id || "own"}${accountLeft(acc) ? `: ${accountLeft(acc)}` : ""}` : "";
+  const acc = accs.find((a) => a.id === (m.account || "") && a.mine !== false);
+  const accText = acc && (acc.id || acc.pc || accs.length > 1) ? `${accountName(acc)}${accountLeft(acc) ? `: ${accountLeft(acc)}` : ""}` : "";
   card.tok.hidden = card.tok.hidden && !accText;
   setText(card.tok, [accText, m.ctx && `${ckNum(m.ctx)} context`, m.used && `${ckNum(m.used)} used${before.length ? ` (${AGENT_NAME[m.agent] || m.agent})` : ""}`,
     ...before.map(([a, n]) => `${ckNum(n)} (${AGENT_NAME[a] || a})`)].filter(Boolean).join(" · "));
@@ -1898,16 +1899,16 @@ function ckLine(card, e) {
     const curr = card.pick?.account ?? card.meta?.account ?? "";
     const other = all.find((a) => (a.id || "") !== curr);
     if (other) {
-      const swBtn = el("button", "btn small quiet", `Switch to ${other.id || "own"}`);
+      const swBtn = el("button", "btn small quiet", `Switch to ${accountName(other)}`);
       swBtn.type = "button";
       swBtn.style.marginLeft = "8px";
       const ag = card.pick?.agent || card.meta.agent;
-      swBtn.title = `Switch this chat to the ${AGENT_NAME[ag] || ag} account ${other.id || "own"}`;
+      swBtn.title = `Switch this chat to the ${AGENT_NAME[ag] || ag} account ${accountName(other)}`;
       swBtn.onclick = () => {
         card.pick = { ...(card.pick || {}), agent: ag, account: other.id, accountSet: true, touched: true };
         ckPicker(card);
         card.input.focus();
-        toast(`Switched to ${other.id || "own"}`);
+        toast(`Switched to ${accountName(other)}`);
       };
       line.append(swBtn);
     }

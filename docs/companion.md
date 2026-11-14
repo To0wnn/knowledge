@@ -267,7 +267,9 @@ fixed remote actions and relays chats. Installing it is part of the client setup
   pc is shared with for use adds their own accounts there (never the pc's own sign-in, which they see without who it
   is). For them "own" (and a turn whose account is no longer theirs) runs on what the pc's owner made main there,
   the account the workers use, so an owner who signed in as an extra account and signed the pc's own out still
-  lends it (`chat_account`). An account from before owners were kept counts as the pc owner's. The companion checks the owner again
+  lends it (`chat_account`). They see that "own" under the name of the account it runs on (the owner's main, else the
+  owner's name) with what is left of it, never its email; with nothing signed in it shows "not signed in" and cannot
+  be picked (`owner_main`, `accountName`). An account from before owners were kept counts as the pc owner's. The companion checks the owner again
   (`accounts.may`, with `pc_owner` from the server's action): the server only knows the accounts the pc reported, a
   minute late, so it lets an unknown name through as a new one. A first sign-in that gives no link leaves no folder.
 - **Remove while in use:** an account a chat turn (or its subagent or shell) or a worker runs on is not removed at
