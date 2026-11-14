@@ -111,11 +111,44 @@ def shared_text(path: Path, shared: Path) -> str:
     return expand(body, shared) if path.name == "CLAUDE.md" else body
 
 
-def native(agent: str, shared: Path = None) -> str:
+def codex_skips(raw: str) -> bool:
+    """Codex reads AGENTS.override.md instead of AGENTS.md when it is not empty, and stops adding instruction files at
+    project_doc_max_bytes (32 KiB unless set): in config.toml (any profile) or as -c on a process above the hook."""
+    home = Path(os.environ.get("CODEX_HOME") or Path.home() / ".codex")
+    if read(home / "AGENTS.override.md").strip():
+        return True
+    limits = [int(n) for n in re.findall(r"^\s*project_doc_max_bytes\s*=\s*(\d+)", read(home / "config.toml"), re.M)]
+    if limits and min(limits) < len(raw.encode("utf-8")):
+        return True
+    return any("project_doc_max_bytes" in a for args in ancestors() for a in args)
+
+
+AGY_BUDGET = 60_000  # bytes: agy shares 20k tokens among all always-on rules and turns the largest into a mere pointer
+
+
+def agy_rule_bytes(cwd: str) -> int:
+    """The always-on rule files agy loads: its global ones, config/rules, plugin rules, and AGENTS.md / GEMINI.md /
+    .agents/ from the folder up to the repository root (https://antigravity.google/docs/rules)."""
+    home, files = Path.home(), []
+    files += [home / ".gemini" / n for n in ("AGENTS.md", "GEMINI.md", "config/AGENTS.md", "config/GEMINI.md")]
+    files += sorted((home / ".gemini" / "config" / "rules").glob("*.md")) + sorted(home.glob(".gemini/config/plugins/*/rules/*.md"))
+    d = Path(cwd).resolve()
+    while True:
+        files += [d / n for n in ("AGENTS.md", "GEMINI.md", ".agents/AGENTS.md", ".agents/GEMINI.md")]
+        files += sorted((d / ".agents" / "rules").glob("*.md"))
+        if (d / ".git").exists() or d == d.parent:
+            break
+        d = d.parent
+    return sum(f.stat().st_size for f in files if f.is_file())
+
+
+def native(agent: str, shared: Path = None, cwd: str = "") -> str:
     shared = shared or Path.home() / ".claude" / "gedeeld"
     path = own_file(agent)
     raw = read(path) if path else ""
-    if agent in MAX_BYTES and len(raw.encode("utf-8")) > MAX_BYTES[agent] or agent == "claude" and claude_excludes():
+    if (agent in MAX_BYTES and len(raw.encode("utf-8")) > MAX_BYTES[agent] or agent == "claude" and claude_excludes()
+            or agent == "codex" and codex_skips(raw)
+            or agent == "agy" and agy_rule_bytes(cwd or os.environ.get("CLAUDE_PROJECT_DIR") or os.getcwd()) > AGY_BUDGET):
         return ""
     own = flat(expand(raw, shared))
     if not own:
@@ -164,6 +197,24 @@ def self_test():
         assert native("agy", shared) == "" and native("nobody", shared) == ""  # no file: nothing claimed
         (home / ".codex" / "AGENTS.md").write_text("# Me\n\n# House rules\n1. Search first.\n" + "x" * 30_000, encoding="utf-8")
         assert native("codex", shared) == "", "a file the agent may cut off claims nothing"
+        good = "<!-- Generated -->\n# Me\n\n# House rules\n1. Search first.\n"
+        (home / ".codex" / "AGENTS.md").write_text(good, encoding="utf-8")
+        assert native("codex", shared) != ""
+        (home / ".codex" / "AGENTS.override.md").write_text("Use French.\n", encoding="utf-8")
+        assert native("codex", shared) == "", "Codex reads the override instead"
+        (home / ".codex" / "AGENTS.override.md").write_text("  \n", encoding="utf-8")
+        assert native("codex", shared) != "", "an empty override is skipped by Codex too"
+        (home / ".codex" / "config.toml").write_text("[profiles.x]\nproject_doc_max_bytes = 10\n", encoding="utf-8")
+        assert native("codex", shared) == "", "a limit below the file cuts it"
+        (home / ".codex" / "config.toml").write_text("project_doc_max_bytes = 65536\n", encoding="utf-8")
+        assert native("codex", shared) != ""
+        (home / ".gemini").mkdir()
+        (home / ".gemini" / "GEMINI.md").write_text(good, encoding="utf-8")
+        repo = home / "repo"
+        (repo / ".git").mkdir(parents=True)
+        assert native("agy", shared, str(repo)) != ""
+        (repo / "AGENTS.md").write_text("x" * 70_000, encoding="utf-8")
+        assert native("agy", shared, str(repo)) == "", "past agy's shared rule budget the largest file may become a pointer"
     ancestors = real
     print("ok")
 

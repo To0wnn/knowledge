@@ -66,7 +66,7 @@ def context_text(tok: str, cwd: str, agent: str = "") -> str:
     version = ".".join(map(str, self_update.own()))  # the admin page shows who stays behind; the server says so here
     check = self_update.load().get(f"{agent}:check") or {}  # and why: the last own update check and its failure
     upd = {"upd_at": int(check.get("at", 0)), "upd_err": check.get("error", "")} if check else {}
-    native = native_rules.native(agent)  # shared rule files this agent already loaded itself (hashes only)
+    native = native_rules.native(agent, cwd=cwd)  # shared rule files this agent already loaded itself (hashes only)
     query = urllib.parse.urlencode({**project_query(cwd), "agent": agent, **({"plugin": version} if version else {}), **upd,
                                     **({"native": native} if native else {}),
                                     **({"url": "default"} if token_store.url_is_default() else {})})
